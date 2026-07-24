@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from paper_repro_gym import core, bundle, cli  # noqa: E402
+from paper_repro_gym import core, bundle, cli, scaffold  # noqa: E402
 
 SECRET = "unit-test-secret"
 
@@ -115,9 +115,10 @@ def _sources(argv):
     return [argv[i + 1].split(":")[0] for i, a in enumerate(argv) if a == "-v" and i + 1 < len(argv)]
 
 
-def test_docker_argv_locked_down():
+def test_container_argv_locked_down():
     inp, scr, out = REPO / "inputs", REPO / ".gym/runs/R/scratch", REPO / ".gym/runs/R/output"
-    argv = core.docker_argv("img", inp, scr, out, ["python", "; rm -rf /"])
+    argv = core.container_argv("img", inp, scr, out, ["python", "; rm -rf /"])
+    check("argv[0] is the configured runtime", argv[0] == core.SANDBOX_POLICY["runtime"])
     for flag in ["--network=none", "--cap-drop=ALL", "--read-only", "no-new-privileges", "--user=65534:65534"]:
         check(f"has {flag}", flag in argv)
     check("memory capped", any(a.startswith("--memory=") for a in argv))
@@ -128,6 +129,79 @@ def test_docker_argv_locked_down():
     check("secrets never mounted", not any(s.endswith(".env") or "/.ssh" in s or "/secrets" in s for s in srcs))
     check("no docker socket", not any("docker.sock" in a for a in argv))
     check("command is one argv element", "; rm -rf /" in argv)
+
+
+def test_preflight_classifies_boundary():
+    pf = core.preflight("docker")
+    check("docker preflight names the runtime", pf["runtime"] == "docker")
+    # On a host whose user is in the docker group, docker is weak (root-equiv).
+    if core._in_docker_group():
+        check("docker+group classified weak", pf["boundary"] == "weak")
+        check("weak boundary warns about root-equivalence",
+              any("ROOT-EQUIVALENT" in w for w in pf["warnings"]))
+    absent = core.preflight("definitely-not-a-runtime")
+    check("absent runtime is unavailable", absent["available"] is False)
+    check("absent runtime is not hardened", absent["boundary"] != "hardened")
+
+
+def test_require_hardened_redline():
+    """The enforceable redline: run refuses on a non-hardened boundary."""
+    with tempfile.TemporaryDirectory() as t:
+        inp = Path(t) / "inputs"; inp.mkdir()
+        (inp / "x").write_text("noop")
+        cmd = ["true"]
+        ap = core.sign_approval(core.make_approval(
+            paper_id="p", manifest_hash=core.manifest_of(inp), command=cmd,
+            allowed_domains=[], max_seconds=5, max_output_mb=1, approved_by="op"), SECRET)
+        # docker on this host is not hardened -> must refuse before running.
+        try:
+            core.run_container(approval=ap, secret=SECRET, image="alpine",
+                               inputs_dir=inp, command=cmd, runs_dir=Path(t) / "runs",
+                               require_hardened=True)
+            raise AssertionError("FAIL: ran on a non-hardened boundary")
+        except core.GateError as exc:
+            check("require_hardened refuses a weak boundary", "not hardened" in str(exc))
+
+
+def test_scaffold_from_dossier():
+    proceed = {
+        "identifier": "arxiv:2601.00001", "recommendation": "manual_review",
+        "paper": {"title": "A Study", "canonical_id": "arxiv:2601.00001"},
+        "required_artifacts": {"code": "claimed", "data": "claimed", "models": "not claimed", "verified": False},
+        "compute_envelope": {"note": "7B; ~14 GiB of ~121 GiB unified"},
+    }
+    with tempfile.TemporaryDirectory() as t:
+        dest = Path(t) / "exp"
+        summ = scaffold.scaffold_from_dossier(proceed, dest)
+        check("scaffold reports the paper id", summ["paper_id"] == "arxiv:2601.00001")
+        for f in ["dossier.json", "experiment.json", "claims.json", "TODO.md", "inputs/PLACE_ARTIFACTS_HERE.md"]:
+            check(f"scaffold wrote {f}", (dest / f).exists())
+        claims = json.loads((dest / "claims.json").read_text())
+        check("claims are NOT fabricated (value unset)", claims[0]["claimed_value"] is None)
+        check("tolerance NOT fabricated", claims[0]["tolerance"] is None)
+        exp = json.loads((dest / "experiment.json").read_text())
+        check("command is a TODO template, not runnable", "TODO" in exp["command"][0])
+        check("artifacts recorded as unverified", json.loads((dest / "dossier.json").read_text())["artifacts_verified"] is False)
+
+    # no_go must be refused.
+    try:
+        scaffold.scaffold_from_dossier({"identifier": "x", "recommendation": "no_go"}, Path(t) / "n")
+        raise AssertionError("FAIL: scaffolded a no_go dossier")
+    except ValueError as exc:
+        check("no_go dossier refused", "no_go" in str(exc))
+
+
+def test_scaffold_selects_from_packet():
+    packet = {"dossiers": [
+        {"dossier_id": "ARC-1", "identifier": "a", "recommendation": "manual_review", "paper": {"title": "A"}},
+        {"dossier_id": "ARC-2", "identifier": "b", "recommendation": "proceed", "paper": {"title": "B"}},
+    ]}
+    check("picks by id", scaffold.select_dossier(packet, "ARC-2")["identifier"] == "b")
+    try:
+        scaffold.select_dossier(packet, None)
+        raise AssertionError("FAIL: ambiguous packet not rejected")
+    except ValueError:
+        check("ambiguous packet requires an id (no silent first-match)", True)
 
 
 # ── bundle scoring ──────────────────────────────────────────────────────────
@@ -184,7 +258,9 @@ def test_live_demo():
 
 def main() -> int:
     tests = [test_manifest_and_gate, test_policy_change_invalidates, test_domain_allowlist,
-             test_scanner, test_docker_argv_locked_down, test_claim_evaluation,
+             test_scanner, test_container_argv_locked_down, test_preflight_classifies_boundary,
+             test_require_hardened_redline, test_scaffold_from_dossier,
+             test_scaffold_selects_from_packet, test_claim_evaluation,
              test_bundle_build, test_live_demo]
     failed = 0
     for fn in tests:

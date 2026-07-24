@@ -70,19 +70,45 @@ The container runs `command` with `inputs/` mounted read-only at `/inputs` and a
 writable `/output`. Your run must write the metrics it wants scored to
 `/output/metrics.json` as `{ "<metric>": <number> }`.
 
+## From a reproduction dossier
+
+If you have a dossier from an upstream reproduction-candidate assessor, scaffold
+it straight into an experiment (a `no_go` dossier is refused, and claims are
+never fabricated — you register them):
+
+```bash
+gym scaffold path/to/dossier.json ./experiments/my_paper --id ARC-2026-07-23-001
+```
+
 ## The gated flow
 
 ```bash
+gym preflight                         # is the boundary hardened (rootless podman)?
 export GYM_APPROVAL_SECRET=...        # whoever holds this authorizes runs
 gym approve my_experiment             # build an UNSIGNED approval; review it
 gym sign    my_experiment             # sign it (A1 gate)
-gym run     my_experiment             # contained run; refuses without a valid signed approval
+gym run     my_experiment --require-hardened   # contained run; refuses on a weak boundary
 gym bundle  my_experiment <run_id>    # evidence bundle + verdict
 ```
 
 The A1 approval binds the exact artifact hash, the exact command, and the
-sandbox-policy hash. Change any input byte, the command, or the policy and the
-signature no longer verifies — the run is refused.
+sandbox-policy hash (including the runtime). Change any input byte, the command,
+or the policy and the signature no longer verifies — the run is refused.
+
+**Full walkthrough:** [docs/USAGE.md](docs/USAGE.md). **Boundary & redlines:**
+[docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md), [SECURITY.md](SECURITY.md).
+
+## Roadmap
+
+- **Runtime**: docker/podman selectable via `GYM_RUNTIME` — done. Next: a
+  Firecracker/microVM backend for a kernel-level boundary.
+- **Acquisition**: wire `core.acquire`/`scan_tarball` into a `gym acquire`
+  command with an egress allowlist and a mandatory scan-gate before a run.
+- **Evidence**: add an SPDX SBOM of the container image and input checksums to
+  the bundle; support N repetitions with variance for statistical claims.
+- **GPU**: opt-in `--gpus` with VRAM/accelerator caps recorded in the manifest.
+- **CI**: GitHub Actions to run the test suite and `gym demo` on every push.
+- **Signing**: move from a shared HMAC secret to per-approver keypairs.
 
 ## What it will not do
 

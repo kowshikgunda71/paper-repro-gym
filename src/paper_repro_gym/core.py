@@ -23,6 +23,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tarfile
 import time
@@ -31,10 +32,22 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    import grp
+except ImportError:  # non-POSIX; the docker-group check simply reports unknown
+    grp = None  # type: ignore
+
+# Container runtime, selectable without editing code. `podman` (rootless) is a
+# materially stronger boundary than `docker` on a shared host -- see
+# docs/PODMAN_UPGRADE.md. Because the runtime is part of SANDBOX_POLICY, its
+# hash changes with the runtime, so an approval signed for docker will NOT
+# verify for a podman run (and vice versa) -- deliberate.
+RUNTIME = os.environ.get("GYM_RUNTIME", "docker")
+
 # The fixed container lockdown. Its hash is what an A1 approval binds, so any
 # drift here invalidates every prior approval -- deliberately.
 SANDBOX_POLICY: dict = {
-    "runtime": "docker",
+    "runtime": RUNTIME,
     "network": "none",
     "read_only_root": True,
     "cap_drop": "ALL",
@@ -54,6 +67,61 @@ MAX_ARCHIVE_RATIO = 100  # decompressed/compressed above this = suspected bomb
 class GateError(RuntimeError):
     """Raised when the A1 gate refuses. Never caught silently -- a refusal must
     stop the run, not degrade into an unapproved execution."""
+
+
+# ── boundary preflight (the enforceable redline) ──────────────────────────
+
+def _in_docker_group() -> bool:
+    if grp is None:
+        return False
+    try:
+        return grp.getgrnam("docker").gr_gid in os.getgroups()
+    except (KeyError, OSError):
+        return False
+
+
+def preflight(runtime: str | None = None) -> dict:
+    """Classify the boundary strength of the current runtime, so callers can
+    REFUSE to run untrusted artifacts on a weak (root-equivalent) one.
+
+    boundary is:
+      - "hardened": rootless podman -- an escape lands as an unprivileged user;
+      - "weak": docker whose user is in the `docker` group, or rootful podman --
+        root-equivalent, an escape reaches the host;
+      - "unknown": runtime present but strength couldn't be established.
+    """
+    rt = runtime or SANDBOX_POLICY["runtime"]
+    info: dict = {"runtime": rt, "available": shutil.which(rt) is not None,
+                  "rootless": None, "boundary": "unknown", "warnings": []}
+    if not info["available"]:
+        info["warnings"].append(f"{rt} not found on PATH")
+        return info
+
+    if rt == "podman":
+        try:
+            out = subprocess.run([rt, "info", "--format", "{{.Host.Security.Rootless}}"],
+                                 capture_output=True, text=True, timeout=20)
+            rootless = out.stdout.strip().lower() == "true"
+            info["rootless"] = rootless
+            info["boundary"] = "hardened" if rootless else "weak"
+            if not rootless:
+                info["warnings"].append("podman is running ROOTFUL — rootless is the hardened mode.")
+        except (OSError, subprocess.SubprocessError) as exc:
+            info["warnings"].append(f"could not query podman: {exc}")
+    elif rt == "docker":
+        info["rootless"] = False
+        if _in_docker_group():
+            info["boundary"] = "weak"
+            info["warnings"].append(
+                "docker + membership in the 'docker' group is ROOT-EQUIVALENT: a "
+                "container escape reaches the host. REDLINE — do not run untrusted "
+                "third-party artifacts here. Use rootless podman (see "
+                "docs/PODMAN_UPGRADE.md) or a disposable VM.")
+        else:
+            info["warnings"].append(
+                "docker without docker-group membership — likely a rootful daemon "
+                "reached via sudo; still root-equivalent for the run.")
+    return info
 
 
 # ── hashing / canonical json ──────────────────────────────────────────────
@@ -206,13 +274,14 @@ def scan_tarball(path: Path) -> list[str]:
 
 # ── the containerized run ─────────────────────────────────────────────────
 
-def docker_argv(image: str, inputs: Path, scratch: Path, output: Path,
-                command: list[str]) -> list[str]:
+def container_argv(image: str, inputs: Path, scratch: Path, output: Path,
+                   command: list[str]) -> list[str]:
     """Build the container argv as an ARRAY -- no shell string, so nothing in a
-    paper's filenames or command can be interpolated into a shell."""
+    paper's filenames or command can be interpolated into a shell. argv[0] is
+    the configured runtime (docker or podman); the flags are identical."""
     p = SANDBOX_POLICY
     return [
-        "docker", "run", "--rm",
+        p["runtime"], "run", "--rm",
         f"--network={p['network']}", "--read-only",
         f"--cap-drop={p['cap_drop']}", "--security-opt", "no-new-privileges",
         f"--user={p['user']}", f"--pids-limit={p['pids_limit']}",
@@ -227,9 +296,21 @@ def docker_argv(image: str, inputs: Path, scratch: Path, output: Path,
 
 
 def run_container(*, approval: dict, secret: str, image: str, inputs_dir: Path,
-                  command: list[str], runs_dir: Path) -> dict:
+                  command: list[str], runs_dir: Path, require_hardened: bool = False) -> dict:
     """Execute an approved command in a locked-down container. Refuses without a
-    valid A1 approval binding this exact artifact, command, and policy."""
+    valid A1 approval binding this exact artifact, command, and policy.
+
+    require_hardened=True enforces the podman redline: it refuses to run at all
+    unless the runtime is a hardened (rootless) boundary. Use it whenever the
+    artifact is genuinely untrusted third-party code.
+    """
+    if require_hardened:
+        pf = preflight()
+        if pf["boundary"] != "hardened":
+            raise GateError(
+                f"require_hardened: boundary is '{pf['boundary']}', not hardened — "
+                f"refusing to run untrusted code. {' '.join(pf['warnings'])}")
+
     inputs_dir = inputs_dir.resolve()
     manifest_hash = manifest_of(inputs_dir)
     verify_approval(approval, secret, manifest_hash=manifest_hash, command=command)
@@ -246,7 +327,7 @@ def run_container(*, approval: dict, secret: str, image: str, inputs_dir: Path,
         os.chmod(d, 0o777)
 
     timeout_s = int(approval["limits"]["max_seconds"])
-    argv = docker_argv(image, inputs_dir, scratch, output, command)
+    argv = container_argv(image, inputs_dir, scratch, output, command)
 
     started = time.time()
     killed = False

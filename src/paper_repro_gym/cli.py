@@ -20,7 +20,7 @@ import secrets as _secrets
 import sys
 from pathlib import Path
 
-from . import core, bundle
+from . import core, bundle, scaffold
 
 MIT_LICENSE = (Path(__file__).resolve().parents[2] / "LICENSE")
 CITATION = (Path(__file__).resolve().parents[2] / "CITATION.cff")
@@ -40,13 +40,36 @@ def _secret() -> str:
 
 
 def cmd_check(_args: argparse.Namespace) -> int:
-    import shutil
     print(json.dumps({
         "policy_hash": core.policy_hash(),
         "sandbox_policy": core.SANDBOX_POLICY,
-        "docker_available": shutil.which("docker") is not None,
         "note": "containment, not a sandbox; runs only via a signed A1 approval",
     }, indent=2))
+    return 0
+
+
+def cmd_preflight(_args: argparse.Namespace) -> int:
+    """Report the boundary strength of the current runtime. Exit non-zero when
+    it is not hardened, so CI/scripts can gate on it."""
+    pf = core.preflight()
+    print(json.dumps(pf, indent=2))
+    if pf["boundary"] != "hardened":
+        print(f"\nboundary is '{pf['boundary']}', NOT hardened. Untrusted artifacts "
+              f"should be run with --require-hardened (which will refuse here) or on "
+              f"rootless podman / a disposable VM. See docs/PODMAN_UPGRADE.md.",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_scaffold(args: argparse.Namespace) -> int:
+    payload = json.loads(Path(args.dossier).read_text(encoding="utf-8"))
+    dossier = scaffold.select_dossier(payload, args.id)
+    summary = scaffold.scaffold_from_dossier(dossier, Path(args.dest).resolve())
+    print(json.dumps(summary, indent=2))
+    print(f"\nNext: complete claims.json + experiment.json + inputs/ in {args.dest}, "
+          f"then `gym approve {args.dest} && gym sign {args.dest} && gym run {args.dest}`. "
+          f"See {Path(args.dest) / 'TODO.md'}.")
     return 0
 
 
@@ -85,7 +108,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     workdir = Path(args.workdir).resolve()
     rec = core.run_container(
         approval=approval, secret=_secret(), image=spec["image"],
-        inputs_dir=exp / "inputs", command=spec["command"], runs_dir=workdir / "runs")
+        inputs_dir=exp / "inputs", command=spec["command"], runs_dir=workdir / "runs",
+        require_hardened=getattr(args, "require_hardened", False))
     print(f"run {rec['run_id']}: outcome={rec['outcome']} exit={rec['exit_code']} "
           f"wall={rec['wall_seconds']}s -> {workdir / 'runs' / rec['run_id'] / 'run.json'}")
     return 0 if rec["outcome"] in ("COMPLETED", "FAILED_SAFELY") else 1
@@ -137,11 +161,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="gym", description="paper reproduction workbench (containment, not a sandbox)")
     p.add_argument("--workdir", default=".gym", help="where runs/ and bundles/ are written")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("check", help="environment + policy status").set_defaults(func=cmd_check)
+    sub.add_parser("check", help="policy status").set_defaults(func=cmd_check)
+    sub.add_parser("preflight", help="report boundary strength; non-zero if not hardened").set_defaults(func=cmd_preflight)
     for name, fn, extra in [
+        ("scaffold", cmd_scaffold, [("dossier", {}), ("dest", {}), ("--id", {"default": None})]),
         ("approve", cmd_approve, [("experiment", {}), ("--approved-by", {"default": "operator"})]),
         ("sign", cmd_sign, [("experiment", {})]),
-        ("run", cmd_run, [("experiment", {})]),
+        ("run", cmd_run, [("experiment", {}),
+                          ("--require-hardened", {"action": "store_true",
+                           "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
         ("demo", cmd_demo, []),
     ]:
