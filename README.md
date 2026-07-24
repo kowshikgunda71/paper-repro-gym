@@ -1,5 +1,7 @@
 # paper-repro-gym
 
+[![CI](https://github.com/kowshikgunda71/paper-repro-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/kowshikgunda71/paper-repro-gym/actions/workflows/ci.yml)
+
 A gated, containerized **workbench for reproducing research-paper results** —
 re-running the authors' own artifacts and checking the reported numbers against
 a tolerance you register *before* the run.

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # No pip install — the project is standard-library only.
+
+      - name: Pre-pull the example image
+        # So the live containment canary in the test suite actually runs
+        # (it refuses to pull on its own). This exercises the real container
+        # path — network isolation, resource caps, the A1 gate — on every push.
+        run: docker pull python:3.12-alpine
+
+      - name: Report the container boundary
+        run: PYTHONPATH=src python3 -m paper_repro_gym.cli preflight || true
+
+      - name: Run tests (offline + live containment canary)
+        run: python3 tests/test_gym.py
