@@ -16,6 +16,36 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Code/text files (the reproducer's harness) are captured into the bundle so a
+# published reproduction shows exactly what was run. Binaries, data, and model
+# weights are NOT captured -- those are acquired artifacts, never redistributed.
+CODE_EXTS = {".py", ".sh", ".bash", ".json", ".yaml", ".yml", ".toml", ".cfg",
+             ".ini", ".txt", ".md", ".r", ".jl", ".ipynb", ".c", ".cpp", ".h",
+             ".rs", ".go", ".js", ".ts", ".sql", ".mk"}
+CODE_MAX_BYTES = 256 * 1024
+
+
+def capture_reproduction_code(exp_dir: Path, bundle_dir: Path) -> Path | None:
+    """Copy the reproduction SPEC (experiment.json, claims.json) and the
+    reproducer's harness code (small code/text files under inputs/) into the
+    bundle, so the bundle documents exactly what was run. Large / binary / data
+    files are skipped -- those are acquired artifacts, not the reproducer's code
+    and not ours to redistribute. Returns the code/ dir, or None."""
+    for name in ("experiment.json", "claims.json"):
+        src = exp_dir / name
+        if src.exists():
+            shutil.copy2(src, bundle_dir / name)
+    inputs = exp_dir / "inputs"
+    code_dir = bundle_dir / "code"
+    if inputs.is_dir():
+        for f in sorted(inputs.rglob("*")):
+            if (f.is_file() and f.suffix.lower() in CODE_EXTS
+                    and f.stat().st_size <= CODE_MAX_BYTES):
+                dest = code_dir / f.relative_to(inputs)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dest)
+    return code_dir if code_dir.exists() else None
+
 
 def evaluate_claim(claim: dict, observed: float | None) -> dict:
     """Compare one observed value against a pre-registered claim + tolerance.

@@ -210,6 +210,10 @@ def cmd_bundle(args: argparse.Namespace) -> int:
         observed=observed, run_record=run_rec,
         license_text=MIT_LICENSE.read_text(encoding="utf-8"),
         citation_cff=CITATION.read_text(encoding="utf-8"))
+    # Capture the reproduction spec + the reproducer's harness code into the
+    # bundle so a published reproduction shows exactly what was run.
+    code_dir = bundle.capture_reproduction_code(exp, workdir / "bundles" / args.run_id)
+    summary["code_captured"] = bool(code_dir)
     print(json.dumps(summary, indent=2))
     return 0
 
@@ -227,7 +231,7 @@ def cmd_publish(args: argparse.Namespace) -> int:
         summary = publish.build_publish_repo(
             bundle_dir=Path(args.bundle).resolve(), dest=dest,
             paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL,
-            citation=citation)
+            citation=citation, include_code=not args.no_code)
     except publish.PublishBlocked as exc:
         print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
         return 2
@@ -263,7 +267,8 @@ def cmd_publish_hf(args: argparse.Namespace) -> int:
     try:
         summary = publish.build_publish_repo(
             bundle_dir=Path(args.bundle).resolve(), dest=dest,
-            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL, citation=citation)
+            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL,
+            citation=citation, include_code=not args.no_code)
     except publish.PublishBlocked as exc:
         print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
         return 2
@@ -344,7 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
                                   ("--author-name", {"default": "reproduction",
                                    "help": "you, the reproducer (credited separately from the original authors)"}),
                                   ("--author-email", {"default": None,
-                                   "help": "use your GitHub <id>+<user>@users.noreply.github.com"})]),
+                                   "help": "use your GitHub <id>+<user>@users.noreply.github.com"}),
+                                  ("--no-code", {"action": "store_true",
+                                   "help": "omit the harness code/ (e.g. license-sensitive artifacts)"})]),
         ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
                                "help": "write the board to a markdown file (e.g. INDEX.md)"})]),
         ("publish-hf", cmd_publish_hf, [("bundle", {}), ("dest", {}),
@@ -358,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
                                         ("--paper-doi", {"default": ""}),
                                         ("--author-name", {"default": "reproduction"}),
                                         ("--private", {"action": "store_true"}),
+                                        ("--no-code", {"action": "store_true"}),
                                         ("--dry-run", {"action": "store_true",
                                          "help": "stage the carded dataset without uploading"})]),
         ("demo", cmd_demo, []),

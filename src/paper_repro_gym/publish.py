@@ -25,6 +25,9 @@ from pathlib import Path
 EVIDENCE_FILES = [
     "claim_result_matrix.json", "experiment_manifest.json", "provenance.json",
     "summary.json", "REPRODUCIBILITY.md", "LICENSE",
+    # The reproduction SPEC — the exact command + the pre-registered claims.
+    # These are the reproducer's own config and contain no paper artifacts.
+    "experiment.json", "claims.json",
 ]
 
 
@@ -127,7 +130,8 @@ class PublishBlocked(RuntimeError):
 
 
 def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
-                       paper_url: str, gym_url: str, citation: dict | None = None) -> dict:
+                       paper_url: str, gym_url: str, citation: dict | None = None,
+                       include_code: bool = True) -> dict:
     """Assemble an evidence-only reproduction repo at `dest`. Scans for secrets
     and REFUSES (PublishBlocked) if any are found. Does not touch git or the
     network — that is the caller's separately-gated step.
@@ -147,10 +151,17 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
             shutil.copy2(src, dest / name)
     if (bundle_dir / "logs").is_dir():
         shutil.copytree(bundle_dir / "logs", dest / "logs", dirs_exist_ok=True)
+    # The reproducer's harness code (captured by `gym bundle`) — publish it so
+    # the reproduction is transparent, unless --no-code was passed for a
+    # license-sensitive artifact. Paper artifacts are never in here.
+    has_code = include_code and (bundle_dir / "code").is_dir()
+    if has_code:
+        shutil.copytree(bundle_dir / "code", dest / "code", dirs_exist_ok=True)
 
     # Cite the ORIGINAL paper (not the gym) — academic-integrity requirement.
     (dest / "CITATION.cff").write_text(_citation_cff(citation, verdict), encoding="utf-8")
-    (dest / "README.md").write_text(_readme(paper_id, paper_url, gym_url, verdict, matrix, citation), encoding="utf-8")
+    (dest / "README.md").write_text(
+        _readme(paper_id, paper_url, gym_url, verdict, matrix, citation, has_code), encoding="utf-8")
     (dest / "ACQUISITION.md").write_text(_acquisition(paper_id, paper_url), encoding="utf-8")
     (dest / ".gitignore").write_text("inputs/\n*.tar*\n*.ckpt\n*.pt\n*.pth\n*.safetensors\n__pycache__/\n", encoding="utf-8")
 
@@ -162,6 +173,7 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
         raise PublishBlocked("secret/PII scan blocked publish:\n  " + "\n  ".join(findings[:20]))
 
     return {"dest": str(dest), "verdict": verdict, "paper_id": paper_id,
+            "code_published": has_code,
             "files": sorted(p.name for p in dest.iterdir() if p.is_file())}
 
 
@@ -183,7 +195,7 @@ def _format_citation(citation: dict) -> str:
 
 
 def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
-            matrix: dict, citation: dict) -> str:
+            matrix: dict, citation: dict, has_code: bool = False) -> str:
     rows = matrix.get("claims", [])
     reproduced = sum(1 for r in rows if r.get("verdict") == "REPRODUCED")
     lines = [
@@ -217,6 +229,19 @@ def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
         lines.append(
             f"| {str(r.get('description',''))[:40]} | {r.get('metric')} | {r.get('claimed_value')} | "
             f"{r.get('observed_value')} | {r.get('tolerance')} ({r.get('tolerance_kind')}) | {r.get('verdict')} |")
+    lines += [
+        "", "## How it was reproduced", "",
+        "- `experiment.json` — the exact image and command that was run.",
+        "- `claims.json` — the claims and tolerances, registered before the run.",
+    ]
+    if has_code:
+        lines.append("- `code/` — the reproduction harness (the scripts that were run). "
+                     "This is the reproducer's own code; the paper's artifacts are **not** "
+                     "redistributed (see [ACQUISITION.md](ACQUISITION.md)).")
+    else:
+        lines.append("- The paper's artifacts and the run command are described in "
+                     "`experiment_manifest.json`; artifacts are obtained per "
+                     "[ACQUISITION.md](ACQUISITION.md), not redistributed here.")
     lines += [
         "", "## Evidence in this repo", "",
         "- `claim_result_matrix.json` — claimed vs observed vs pre-registered tolerance",
