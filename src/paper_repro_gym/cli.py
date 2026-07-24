@@ -218,6 +218,50 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_import_run(args: argparse.Namespace) -> int:
+    """Score an externally-produced result (e.g. from Colab/Kaggle/an HPC job)
+    against this experiment's pre-registered claims, and build a bundle. Use
+    this when the heavy run happened off-box: bring back only metrics.json.
+
+    Honest by construction: the boundary is recorded as `external:<where>`, not
+    a gym-contained run, so the bundle never overstates the isolation."""
+    from datetime import datetime, timezone
+    exp = Path(args.experiment).resolve()
+    workdir = Path(args.workdir).resolve()
+    claims = _load(exp, "claims.json")
+    dossier = _load(exp, "dossier.json")
+    observed = json.loads(Path(args.metrics).read_text(encoding="utf-8"))
+
+    run_id = "external-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    manifest_hash = core.manifest_of(exp / "inputs") if (exp / "inputs").is_dir() else "external"
+    run_rec = {
+        "run_id": run_id, "paper_id": dossier.get("paper_id"),
+        "artifact_manifest_hash": manifest_hash, "sandbox_policy_hash": None,
+        "sandbox_policy": {"runtime": "external"}, "image": args.image or "external",
+        "image_digest": None, "digest_pinned": False,
+        "command": (args.command.split() if args.command else []),
+        "boundary": f"external:{args.ran_on}", "exit_code": 0, "killed_on_timeout": False,
+        "wall_seconds": None, "stdout_tail": "", "stderr_tail": "", "output_bytes": 0,
+        "output_over_cap": False, "outcome": "COMPLETED",
+        "containment_note": f"run externally on {args.ran_on}; NOT gym-contained "
+                            "(the external environment was the sandbox)",
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+    }
+    run_dir = workdir / "runs" / run_id
+    (run_dir / "output").mkdir(parents=True, exist_ok=True)
+    (run_dir / "run.json").write_text(json.dumps(run_rec, indent=2), encoding="utf-8")
+    (run_dir / "output" / "metrics.json").write_text(json.dumps(observed), encoding="utf-8")
+
+    summary = bundle.build_bundle(
+        out_dir=workdir / "bundles" / run_id, dossier=dossier, claims=claims,
+        observed=observed, run_record=run_rec,
+        license_text=MIT_LICENSE.read_text(encoding="utf-8"),
+        citation_cff=CITATION.read_text(encoding="utf-8"))
+    bundle.capture_reproduction_code(exp, workdir / "bundles" / run_id)
+    print(json.dumps({**summary, "run_id": run_id, "boundary": run_rec["boundary"]}, indent=2))
+    return 0
+
+
 def cmd_publish(args: argparse.Namespace) -> int:
     """Stage a completed bundle into its OWN standalone reproduction repo
     (evidence only). Hard-refuses on any secret/PII. Never pushes — prints the
@@ -337,6 +381,11 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--require-hardened", {"action": "store_true",
                            "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
+        ("import-run", cmd_import_run, [("experiment", {}),
+                                        ("--metrics", {"required": True, "help": "metrics.json produced off-box"}),
+                                        ("--ran-on", {"required": True, "help": "where it ran, e.g. 'Google Colab (T4)'"}),
+                                        ("--image", {"default": ""}),
+                                        ("--command", {"default": ""})]),
         ("publish", cmd_publish, [("bundle", {}), ("dest", {}),
                                   ("--paper-id", {"required": True}),
                                   ("--paper-url", {"default": ""}),
