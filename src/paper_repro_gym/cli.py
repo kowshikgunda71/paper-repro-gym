@@ -17,10 +17,14 @@ import argparse
 import json
 import os
 import secrets as _secrets
+import shutil
 import sys
+import tarfile
 from pathlib import Path
 
 from . import core, bundle, scaffold
+
+SCAN_BLOCK = ".scan_block"
 
 MIT_LICENSE = (Path(__file__).resolve().parents[2] / "LICENSE")
 CITATION = (Path(__file__).resolve().parents[2] / "CITATION.cff")
@@ -101,8 +105,76 @@ def cmd_sign(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pin(args: argparse.Namespace) -> int:
+    """Print the digest-pinned reference for an image, to paste into
+    experiment.json for a bit-reproducible run."""
+    d = core.image_digest(args.image)
+    if not d:
+        print(f"could not resolve a digest for {args.image!r} — pull it first "
+              f"({core.SANDBOX_POLICY['runtime']} pull {args.image}).", file=sys.stderr)
+        return 1
+    print(d)
+    return 0
+
+
+def _scan_gate(exp: Path) -> None:
+    """The enforced scan-gate: `gym acquire` writes .scan_block when a downloaded
+    artifact tripped the scanner; `run` refuses until it is cleared."""
+    if (exp / SCAN_BLOCK).exists():
+        raise core.GateError(
+            f"scan gate not cleared: `gym acquire` found issues in this experiment's "
+            f"artifacts (see acquisition.json). Resolve them, or re-acquire with "
+            f"--allow-findings if you have reviewed and accept them.")
+
+
+def cmd_acquire(args: argparse.Namespace) -> int:
+    """Download the experiment's declared artifacts into inputs/, quarantined,
+    checksum-verified, and scanned. A scan finding BLOCKS the run unless
+    explicitly overridden with --allow-findings."""
+    exp = Path(args.experiment).resolve()
+    spec = _load(exp, "experiment.json")
+    artifacts = spec.get("artifacts", [])
+    if not artifacts:
+        print("no `artifacts` declared in experiment.json — nothing to acquire.")
+        (exp / SCAN_BLOCK).unlink(missing_ok=True)
+        return 0
+
+    inputs = exp / "inputs"; inputs.mkdir(exist_ok=True)
+    quarantine = exp / ".quarantine"
+    domains = spec.get("allowed_domains", [])
+    report: dict = {"artifacts": [], "findings": []}
+
+    for a in artifacts:
+        path = core.acquire(a["url"], domains, quarantine, a.get("sha256"))
+        findings = core.scan_tarball(path) if tarfile.is_tarfile(path) else []
+        dest = inputs / (a.get("dest") or path.name.split("-", 1)[-1])
+        shutil.copy2(path, dest)
+        report["artifacts"].append({
+            "url": a["url"], "sha256": core.sha256_file(dest),
+            "dest": str(dest.relative_to(exp)), "findings": findings})
+        report["findings"].extend(findings)
+
+    (exp / "acquisition.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    if report["findings"] and not args.allow_findings:
+        (exp / SCAN_BLOCK).write_text("scan findings present; review acquisition.json, "
+                                      "then re-run acquire with --allow-findings to override\n")
+        print(f"BLOCKED: {len(report['findings'])} scan finding(s) — the run is now gated. "
+              f"See {exp / 'acquisition.json'}:", file=sys.stderr)
+        for f in report["findings"][:10]:
+            print(f"  - {f}", file=sys.stderr)
+        return 3
+
+    (exp / SCAN_BLOCK).unlink(missing_ok=True)
+    print(json.dumps({"acquired": len(report["artifacts"]),
+                      "findings": len(report["findings"]),
+                      "gate": "clear"}, indent=2))
+    return 0
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     exp = Path(args.experiment).resolve()
+    _scan_gate(exp)
     spec = _load(exp, "experiment.json")
     approval = json.loads((exp / "approval.signed.json").read_text(encoding="utf-8"))
     workdir = Path(args.workdir).resolve()
@@ -165,6 +237,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("preflight", help="report boundary strength; non-zero if not hardened").set_defaults(func=cmd_preflight)
     for name, fn, extra in [
         ("scaffold", cmd_scaffold, [("dossier", {}), ("dest", {}), ("--id", {"default": None})]),
+        ("pin", cmd_pin, [("image", {})]),
+        ("acquire", cmd_acquire, [("experiment", {}),
+                                  ("--allow-findings", {"action": "store_true",
+                                   "help": "override the scan-gate after reviewing findings"})]),
         ("approve", cmd_approve, [("experiment", {}), ("--approved-by", {"default": "operator"})]),
         ("sign", cmd_sign, [("experiment", {})]),
         ("run", cmd_run, [("experiment", {}),

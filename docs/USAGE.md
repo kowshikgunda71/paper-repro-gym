@@ -89,9 +89,36 @@ tolerance. Unset claims score `INCONCLUSIVE`, never a pass.
 
 Put the paper's code/data under `inputs/`. Acquire lawfully from the official
 source and respect each artifact's license — the gym never redistributes them.
-For anything downloaded, use the quarantine+checksum+scan path rather than
-extracting on the host. Your run must write the metrics it wants scored to
-`/output/metrics.json`, e.g. `{"top1_accuracy": 75.9}`.
+Your run must write the metrics it wants scored to `/output/metrics.json`, e.g.
+`{"top1_accuracy": 75.9}`.
+
+For downloads, declare them in `experiment.json` and let `gym acquire` fetch
+them into `inputs/` — quarantined, checksum-verified, and scanned:
+
+```json
+"artifacts": [
+  {"url": "https://example.org/model.tar.gz", "sha256": "abc123…", "dest": "model.tar.gz"}
+]
+```
+
+```bash
+gym acquire experiments/my_paper
+```
+
+`acquire` only downloads from `allowed_domains`, verifies the checksum when you
+give one, and scans archives (pickle/hook/symlink/traversal/bomb) **without
+extracting on the host**. A finding **blocks the run** — `gym run` refuses until
+you resolve it or re-acquire with `--allow-findings` after reviewing
+`acquisition.json`. Extraction happens inside the container.
+
+**Pin the image by digest** for a bit-reproducible run:
+
+```bash
+gym pin python:3.12-alpine        # -> python@sha256:…  (paste into experiment.json "image")
+```
+
+Runs record the resolved `image_digest`, whether it was `digest_pinned`, and the
+`boundary` they ran on, all in the bundle manifest.
 
 ## 5. Describe the run
 

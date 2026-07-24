@@ -191,6 +191,45 @@ def test_scaffold_from_dossier():
         check("no_go dossier refused", "no_go" in str(exc))
 
 
+def test_digest_pinning():
+    check("tag is not digest-pinned", not core.is_digest_pinned("python:3.12-alpine"))
+    check("digest ref is pinned", core.is_digest_pinned("python@sha256:" + "a" * 64))
+    check("digest of absent image is None", core.image_digest("no-such-image:xyz") is None)
+
+
+def test_scan_gate_blocks_run():
+    """The enforced scan-gate: a .scan_block marker makes run refuse before it
+    even looks at the approval."""
+    with tempfile.TemporaryDirectory() as t:
+        exp = Path(t)
+        (exp / ".scan_block").write_text("findings present\n")
+        try:
+            cli._scan_gate(exp)
+            raise AssertionError("FAIL: scan gate did not block")
+        except core.GateError as exc:
+            check("scan gate refuses a blocked experiment", "scan gate not cleared" in str(exc))
+        (exp / ".scan_block").unlink()
+        cli._scan_gate(exp)  # cleared -> no raise
+        check("scan gate passes once cleared", True)
+
+
+def test_bundle_records_digest_and_boundary():
+    with tempfile.TemporaryDirectory() as t:
+        out = Path(t) / "b"
+        run_rec = {"run_id": "R1", "image": "img@sha256:" + "b" * 64, "image_digest": "img@sha256:" + "b" * 64,
+                   "digest_pinned": True, "boundary": "hardened", "command": ["x"],
+                   "artifact_manifest_hash": "h", "sandbox_policy_hash": core.policy_hash(),
+                   "sandbox_policy": core.SANDBOX_POLICY, "wall_seconds": 1, "output_bytes": 1,
+                   "killed_on_timeout": False, "outcome": "COMPLETED", "stdout_tail": "",
+                   "stderr_tail": "", "finished_at": "2026-07-24T00:00:00Z"}
+        bundle.build_bundle(out_dir=out, dossier={"paper_id": "p"}, claims=[],
+                            observed={}, run_record=run_rec, license_text="MIT", citation_cff="cff")
+        man = json.loads((out / "experiment_manifest.json").read_text())
+        check("manifest records image digest", man["image_digest"].startswith("img@sha256:"))
+        check("manifest records digest_pinned", man["digest_pinned"] is True)
+        check("manifest records boundary", man["boundary"] == "hardened")
+
+
 def test_scaffold_selects_from_packet():
     packet = {"dossiers": [
         {"dossier_id": "ARC-1", "identifier": "a", "recommendation": "manual_review", "paper": {"title": "A"}},
@@ -260,6 +299,8 @@ def main() -> int:
     tests = [test_manifest_and_gate, test_policy_change_invalidates, test_domain_allowlist,
              test_scanner, test_container_argv_locked_down, test_preflight_classifies_boundary,
              test_require_hardened_redline, test_scaffold_from_dossier,
+             test_digest_pinning, test_scan_gate_blocks_run,
+             test_bundle_records_digest_and_boundary,
              test_scaffold_selects_from_packet, test_claim_evaluation,
              test_bundle_build, test_live_demo]
     failed = 0

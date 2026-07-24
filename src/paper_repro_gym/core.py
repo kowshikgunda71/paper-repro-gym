@@ -272,6 +272,29 @@ def scan_tarball(path: Path) -> list[str]:
     return findings
 
 
+# ── image digest pinning (reproducibility) ────────────────────────────────
+
+def is_digest_pinned(image: str) -> bool:
+    """True if the image is pinned by content digest (name@sha256:...) rather
+    than a mutable tag. A tag like `python:3.12` can change under you; a digest
+    cannot, so a digest-pinned run is bit-reproducible."""
+    return "@sha256:" in image
+
+
+def image_digest(image: str, runtime: str | None = None) -> str | None:
+    """The content digest of a locally-present image, or None. Recorded in the
+    run so the bundle documents exactly what ran even when a tag was used."""
+    rt = runtime or SANDBOX_POLICY["runtime"]
+    if not shutil.which(rt):
+        return None
+    try:
+        out = subprocess.run([rt, "image", "inspect", image, "--format", "{{index .RepoDigests 0}}"],
+                             capture_output=True, text=True, timeout=20)
+        return out.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
 # ── the containerized run ─────────────────────────────────────────────────
 
 def container_argv(image: str, inputs: Path, scratch: Path, output: Path,
@@ -350,6 +373,9 @@ def run_container(*, approval: dict, secret: str, image: str, inputs_dir: Path,
         "container_argv": argv,
         "command": command,
         "image": image,
+        "image_digest": image_digest(image),
+        "digest_pinned": is_digest_pinned(image),
+        "boundary": preflight()["boundary"],
         "exit_code": rc,
         "killed_on_timeout": killed,
         "wall_seconds": round(time.time() - started, 2),
