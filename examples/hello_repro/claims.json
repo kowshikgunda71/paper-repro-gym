@@ -1,0 +1,11 @@
+[
+  {
+    "id": "C1",
+    "description": "Leibniz sum estimates pi",
+    "section": "example",
+    "metric": "pi_estimate",
+    "claimed_value": 3.14159,
+    "tolerance": 0.001,
+    "tolerance_kind": "abs"
+  }
+]

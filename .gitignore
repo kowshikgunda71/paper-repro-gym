@@ -1,0 +1,20 @@
+# Runtime working dirs — never committed
+.gym/
+runs/
+bundles/
+quarantine/
+
+# Generated approvals (contain a signature; regenerate per run)
+**/approval.json
+**/approval.signed.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+
+# Editor / OS
+.DS_Store
+*.swp

@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "paper-repro-gym"
+abstract: "A gated, containerized workbench for reproducing (not replicating) the results of research papers, with a pre-registered claim/tolerance matrix and an evidence bundle."
+type: software
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/kowshikgunda71/paper-repro-gym"
+keywords:
+  - reproducibility
+  - research
+  - containers
+  - machine-learning

@@ -1,0 +1,7 @@
+{
+  "image": "python:3.12-alpine",
+  "command": ["python", "/inputs/compute.py"],
+  "allowed_domains": [],
+  "max_seconds": 120,
+  "max_output_mb": 5
+}
