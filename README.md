@@ -98,7 +98,8 @@ sandbox-policy hash (including the runtime). Change any input byte, the command,
 or the policy and the signature no longer verifies — the run is refused.
 
 **Full walkthrough:** [docs/USAGE.md](docs/USAGE.md). **Boundary & redlines:**
-[docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md), [SECURITY.md](SECURITY.md).
+[docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md), [SECURITY.md](SECURITY.md). **Frontier papers on
+free/academic compute:** [docs/COMPUTE.md](docs/COMPUTE.md).
 
 ## Publishing a reproduction
 
