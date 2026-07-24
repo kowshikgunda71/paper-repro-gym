@@ -267,13 +267,13 @@ def test_publish_refuses_secrets_and_pii():
         t = Path(td)
         b = _make_bundle(t)
         # A real email leaks into an evidence file.
-        (b / "REPRODUCIBILITY.md").write_text("contact: someone@gmail.com\n", encoding="utf-8")
+        (b / "REPRODUCIBILITY.md").write_text("contact: someone@example.com\n", encoding="utf-8")
         try:
             publish.build_publish_repo(bundle_dir=b, dest=t / "r1", paper_id="p",
                                        paper_url="u", gym_url="g")
             raise AssertionError("FAIL: published a real email")
         except publish.PublishBlocked as exc:
-            check("real email blocks publish", "gmail.com" in str(exc))
+            check("real email blocks publish", "example.com" in str(exc))
 
         # A token leaks.
         b2 = _make_bundle(t / "x")
