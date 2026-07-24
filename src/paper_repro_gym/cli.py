@@ -347,6 +347,62 @@ def cmd_index(args: argparse.Namespace) -> int:
     return 0
 
 
+def _path_size(p: Path) -> int:
+    if p.is_file():
+        return p.stat().st_size
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
+def _human(n: int) -> str:
+    x = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if x < 1024 or unit == "TB":
+            return f"{x:.1f} {unit}"
+        x /= 1024
+    return f"{n} B"
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    """Reclaim disk after publishing. Removes the run/bundle/quarantine runtime
+    (safe to delete — the published repo is the source of truth) and, with
+    --artifacts, the acquired inputs (re-downloadable from the official source).
+    --purge removes the whole path. Always --dry-run first if unsure."""
+    target = Path(args.path).resolve()
+    to_remove: list[Path] = []
+    if args.purge:
+        to_remove = [target]
+    else:
+        for rel in (".gym/runs", ".gym/bundles", ".quarantine"):
+            d = target / rel
+            if d.exists():
+                to_remove.append(d)
+        for f in ("approval.json", "approval.signed.json", ".scan_block", "acquisition.json"):
+            fp = target / f
+            if fp.exists():
+                to_remove.append(fp)
+        if args.artifacts and (target / "inputs").is_dir():
+            to_remove.append(target / "inputs")
+
+    total = sum(_path_size(p) for p in to_remove)
+    if not to_remove:
+        print(f"nothing to clean under {target}")
+        return 0
+    if args.dry_run:
+        print(f"would free {_human(total)} from {len(to_remove)} path(s):")
+        for p in to_remove:
+            print(f"  {p}  ({_human(_path_size(p))})")
+        return 0
+
+    import shutil
+    for p in to_remove:
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        else:
+            p.unlink(missing_ok=True)
+    print(f"freed {_human(total)} ({len(to_remove)} path(s) removed under {target})")
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     """Run the bundled hello_repro example through the whole gated flow, to
     prove the machinery end to end. Uses an ephemeral approval secret."""
@@ -403,6 +459,11 @@ def build_parser() -> argparse.ArgumentParser:
                                    "help": "omit the harness code/ (e.g. license-sensitive artifacts)"})]),
         ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
                                "help": "write the board to a markdown file (e.g. INDEX.md)"})]),
+        ("clean", cmd_clean, [("path", {}),
+                              ("--artifacts", {"action": "store_true",
+                               "help": "also remove acquired inputs/ (re-downloadable)"}),
+                              ("--purge", {"action": "store_true", "help": "remove the whole path"}),
+                              ("--dry-run", {"action": "store_true"})]),
         ("publish-hf", cmd_publish_hf, [("bundle", {}), ("dest", {}),
                                         ("--repo-id", {"required": True, "help": "owner/name for the HF dataset"}),
                                         ("--paper-id", {"required": True}),
