@@ -100,16 +100,35 @@ or the policy and the signature no longer verifies — the run is refused.
 **Full walkthrough:** [docs/USAGE.md](docs/USAGE.md). **Boundary & redlines:**
 [docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md), [SECURITY.md](SECURITY.md).
 
+## Publishing a reproduction
+
+This repo is the **tool**. Each paper you reproduce becomes **its own separate
+repo** — evidence only, never part of this one:
+
+```bash
+gym publish .gym/bundles/<run_id> ~/repro-repos/repro-<paper> \
+  --paper-id "arxiv:2601.12345" --paper-url "https://arxiv.org/abs/2601.12345" \
+  --author-email "<id>+<user>@users.noreply.github.com"
+```
+
+`publish` copies only the evidence (claim/result matrix, manifest, provenance,
+logs, reproducibility notes), writes an `ACQUISITION.md` pointing to the
+official artifact source, **redacts host paths, and hard-refuses on any secret
+or personal email** — then commits locally and prints the `gh` command to push.
+It never redistributes the paper's code/data/models, and never pushes for you.
+
 ## Roadmap
 
-- **Runtime**: docker/podman selectable via `GYM_RUNTIME` — done. Next: a
+- **Runtime**: docker/podman selectable via `GYM_RUNTIME` — ✅ done. Next: a
   Firecracker/microVM backend for a kernel-level boundary.
-- **Acquisition**: wire `core.acquire`/`scan_tarball` into a `gym acquire`
-  command with an egress allowlist and a mandatory scan-gate before a run.
-- **Evidence**: add an SPDX SBOM of the container image and input checksums to
-  the bundle; support N repetitions with variance for statistical claims.
+- **Acquisition**: `gym acquire` with an enforced scan-gate — ✅ done.
+- **Reproducibility**: image digest pinning + digest/boundary in the manifest —
+  ✅ done. Next: SPDX SBOM of the image and N-run variance for statistical claims.
+- **Publishing**: `gym publish` emits a standalone, secret-scanned reproduction
+  repo — ✅ done. Next: optional Hugging Face publishing (model/dataset cards,
+  the HF papers ecosystem) for reproductions that produce shareable artifacts.
+- **CI**: GitHub Actions on every push (incl. the live containment canary) — ✅ done.
 - **GPU**: opt-in `--gpus` with VRAM/accelerator caps recorded in the manifest.
-- **CI**: GitHub Actions to run the test suite and `gym demo` on every push.
 - **Signing**: move from a shared HMAC secret to per-approver keypairs.
 
 ## What it will not do

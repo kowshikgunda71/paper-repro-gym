@@ -14,8 +14,15 @@ assessor rejected.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def slug(value: str) -> str:
+    """Filesystem/repo-safe slug from an arbitrary id (e.g. a DOI or arXiv id)."""
+    s = re.sub(r"[^a-z0-9._-]+", "-", (value or "").lower()).strip("-")
+    return s[:80] or "paper"
 
 
 def _dossier_field(d: dict, *keys, default=None):

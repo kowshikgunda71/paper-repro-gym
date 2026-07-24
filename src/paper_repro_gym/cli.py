@@ -22,9 +22,10 @@ import sys
 import tarfile
 from pathlib import Path
 
-from . import core, bundle, scaffold
+from . import core, bundle, scaffold, publish
 
 SCAN_BLOCK = ".scan_block"
+GYM_URL = "https://github.com/kowshikgunda71/paper-repro-gym"
 
 MIT_LICENSE = (Path(__file__).resolve().parents[2] / "LICENSE")
 CITATION = (Path(__file__).resolve().parents[2] / "CITATION.cff")
@@ -213,6 +214,39 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_publish(args: argparse.Namespace) -> int:
+    """Stage a completed bundle into its OWN standalone reproduction repo
+    (evidence only). Hard-refuses on any secret/PII. Never pushes — prints the
+    exact gh command for you to run after review."""
+    dest = Path(args.dest).resolve()
+    try:
+        summary = publish.build_publish_repo(
+            bundle_dir=Path(args.bundle).resolve(), dest=dest,
+            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL)
+    except publish.PublishBlocked as exc:
+        print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
+        return 2
+
+    # Local git only: init + commit under a no-reply author. NO push.
+    import subprocess
+    email = args.author_email or "REPLACE@users.noreply.github.com"
+    for cmd in (["git", "init", "-q"],
+                ["git", "config", "user.name", args.author_name],
+                ["git", "config", "user.email", email],
+                ["git", "add", "-A"],
+                ["git", "commit", "-q", "-m",
+                 f"Reproduction of {args.paper_id}: {summary['verdict']}"]):
+        subprocess.run(cmd, cwd=dest, check=False, capture_output=True)
+
+    print(json.dumps(summary, indent=2))
+    repo = args.repo_name or f"repro-{scaffold.slug(args.paper_id)}"
+    print(f"\nStaged (evidence only, secret-scanned, NOT pushed): {dest}")
+    print(f"To publish it as its own repo, review then run:")
+    print(f"  gh repo create {repo} --public --source={dest} --remote=origin --push \\")
+    print(f"     --description \"Reproduction of {args.paper_id} ({summary['verdict']}) — built with paper-repro-gym\"")
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     """Run the bundled hello_repro example through the whole gated flow, to
     prove the machinery end to end. Uses an ephemeral approval secret."""
@@ -247,6 +281,13 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--require-hardened", {"action": "store_true",
                            "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
+        ("publish", cmd_publish, [("bundle", {}), ("dest", {}),
+                                  ("--paper-id", {"required": True}),
+                                  ("--paper-url", {"default": ""}),
+                                  ("--repo-name", {"default": None}),
+                                  ("--author-name", {"default": "reproduction"}),
+                                  ("--author-email", {"default": None,
+                                   "help": "use your GitHub <id>+<user>@users.noreply.github.com"})]),
         ("demo", cmd_demo, []),
     ]:
         sp = sub.add_parser(name)

@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from paper_repro_gym import core, bundle, cli, scaffold  # noqa: E402
+from paper_repro_gym import core, bundle, cli, scaffold, publish  # noqa: E402
 
 SECRET = "unit-test-secret"
 
@@ -230,6 +230,80 @@ def test_bundle_records_digest_and_boundary():
         check("manifest records boundary", man["boundary"] == "hardened")
 
 
+def _make_bundle(t: Path) -> Path:
+    """A minimal completed bundle for publish tests."""
+    b = t / "bundle"; b.mkdir(parents=True)
+    (b / "claim_result_matrix.json").write_text(json.dumps({
+        "paper_id": "arxiv:2601.1", "overall_verdict": "REPRODUCED",
+        "claims": [{"description": "acc", "metric": "acc", "claimed_value": 0.9,
+                    "observed_value": 0.9, "tolerance": 0.01, "tolerance_kind": "abs",
+                    "verdict": "REPRODUCED"}]}), encoding="utf-8")
+    for f in ("experiment_manifest.json", "provenance.json", "summary.json",
+              "REPRODUCIBILITY.md", "CITATION.cff", "LICENSE"):
+        (b / f).write_text("{}" if f.endswith(".json") else "x", encoding="utf-8")
+    (b / "logs").mkdir(); (b / "logs" / "run.json").write_text("{}", encoding="utf-8")
+    return b
+
+
+def test_publish_evidence_only():
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        summ = publish.build_publish_repo(
+            bundle_dir=_make_bundle(t), dest=t / "repo", paper_id="arxiv:2601.1",
+            paper_url="https://arxiv.org/abs/2601.1", gym_url="https://example/gym")
+        dest = t / "repo"
+        check("verdict carried", summ["verdict"] == "REPRODUCED")
+        for f in ["README.md", "ACQUISITION.md", "claim_result_matrix.json", "LICENSE", ".gitignore"]:
+            check(f"repo has {f}", (dest / f).exists())
+        check("README states the verdict", "REPRODUCED" in (dest / "README.md").read_text())
+        check("acquisition says NOT redistributed", "not" in (dest / "ACQUISITION.md").read_text().lower()
+              and "redistribute" in (dest / "ACQUISITION.md").read_text().lower())
+        # The paper's artifacts are gitignored so they can never be committed.
+        check("inputs/ is gitignored", "inputs/" in (dest / ".gitignore").read_text())
+
+
+def test_publish_refuses_secrets_and_pii():
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        b = _make_bundle(t)
+        # A real email leaks into an evidence file.
+        (b / "REPRODUCIBILITY.md").write_text("contact: someone@gmail.com\n", encoding="utf-8")
+        try:
+            publish.build_publish_repo(bundle_dir=b, dest=t / "r1", paper_id="p",
+                                       paper_url="u", gym_url="g")
+            raise AssertionError("FAIL: published a real email")
+        except publish.PublishBlocked as exc:
+            check("real email blocks publish", "gmail.com" in str(exc))
+
+        # A token leaks.
+        b2 = _make_bundle(t / "x")
+        (b2 / "summary.json").write_text('{"t":"ghp_' + "a" * 36 + '"}', encoding="utf-8")
+        try:
+            publish.build_publish_repo(bundle_dir=b2, dest=t / "r2", paper_id="p",
+                                       paper_url="u", gym_url="g")
+            raise AssertionError("FAIL: published a token")
+        except publish.PublishBlocked as exc:
+            check("token blocks publish", "ghp_" in str(exc))
+
+        # A GitHub no-reply email is allowed (not flagged as PII).
+        b3 = _make_bundle(t / "y")
+        (b3 / "CITATION.cff").write_text("email: 12345+user@users.noreply.github.com\n", encoding="utf-8")
+        summ = publish.build_publish_repo(bundle_dir=b3, dest=t / "r3", paper_id="p",
+                                          paper_url="u", gym_url="g")
+        check("no-reply email is allowed", summ["verdict"] == "REPRODUCED")
+
+        # A host path in the run log is REDACTED (username never leaks), and the
+        # scan passes afterwards rather than blocking on evidence.
+        b4 = _make_bundle(t / "z")
+        (b4 / "logs" / "run.json").write_text(
+            '{"argv": ["-v", "/home/zeus/repro/inputs:/inputs:ro"]}', encoding="utf-8")
+        summ = publish.build_publish_repo(bundle_dir=b4, dest=t / "r4", paper_id="p",
+                                          paper_url="u", gym_url="g")
+        run = (t / "r4" / "logs" / "run.json").read_text()
+        check("home path redacted from evidence", "/home/zeus" not in run and "<HOME>" in run)
+        check("relative structure kept as evidence", "repro/inputs:/inputs:ro" in run)
+
+
 def test_scaffold_selects_from_packet():
     packet = {"dossiers": [
         {"dossier_id": "ARC-1", "identifier": "a", "recommendation": "manual_review", "paper": {"title": "A"}},
@@ -301,6 +375,7 @@ def main() -> int:
              test_require_hardened_redline, test_scaffold_from_dossier,
              test_digest_pinning, test_scan_gate_blocks_run,
              test_bundle_records_digest_and_boundary,
+             test_publish_evidence_only, test_publish_refuses_secrets_and_pii,
              test_scaffold_selects_from_packet, test_claim_evaluation,
              test_bundle_build, test_live_demo]
     failed = 0
