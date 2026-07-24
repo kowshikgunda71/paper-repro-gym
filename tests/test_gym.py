@@ -295,12 +295,12 @@ def test_publish_refuses_secrets_and_pii():
         # A host path in the run log is REDACTED (username never leaks), and the
         # scan passes afterwards rather than blocking on evidence.
         b4 = _make_bundle(t / "z")
-        (b4 / "logs" / "run.json").write_text(
-            '{"argv": ["-v", "/home/zeus/repro/inputs:/inputs:ro"]}', encoding="utf-8")
+        host_path = "/home/" + "alice" + "/repro/inputs:/inputs:ro"  # neutral fixture, not this box
+        (b4 / "logs" / "run.json").write_text('{"argv": ["-v", "' + host_path + '"]}', encoding="utf-8")
         summ = publish.build_publish_repo(bundle_dir=b4, dest=t / "r4", paper_id="p",
                                           paper_url="u", gym_url="g")
         run = (t / "r4" / "logs" / "run.json").read_text()
-        check("home path redacted from evidence", "/home/zeus" not in run and "<HOME>" in run)
+        check("home path redacted from evidence", "/home/alice" not in run and "<HOME>" in run)
         check("relative structure kept as evidence", "repro/inputs:/inputs:ro" in run)
 
 
