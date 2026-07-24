@@ -99,7 +99,8 @@ or the policy and the signature no longer verifies — the run is refused.
 
 **Full walkthrough:** [docs/USAGE.md](docs/USAGE.md). **Boundary & redlines:**
 [docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md), [SECURITY.md](SECURITY.md). **Frontier papers on
-free/academic compute:** [docs/COMPUTE.md](docs/COMPUTE.md).
+free/academic compute:** [docs/COMPUTE.md](docs/COMPUTE.md). **Free & government
+data:** [docs/DATASETS.md](docs/DATASETS.md).
 
 ## Publishing a reproduction
 
