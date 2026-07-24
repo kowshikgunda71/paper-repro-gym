@@ -250,7 +250,10 @@ def test_publish_evidence_only():
         t = Path(td)
         summ = publish.build_publish_repo(
             bundle_dir=_make_bundle(t), dest=t / "repo", paper_id="arxiv:2601.1",
-            paper_url="https://arxiv.org/abs/2601.1", gym_url="https://example/gym")
+            paper_url="https://arxiv.org/abs/2601.1", gym_url="https://example/gym",
+            citation={"authors": "Doe, Jane; Roe, Rick", "title": "A Great Paper",
+                      "year": "2024", "venue": "Journal of Things", "doi": "10.1/xyz",
+                      "reproducer": "kowshikgunda71"})
         dest = t / "repo"
         check("verdict carried", summ["verdict"] == "REPRODUCED")
         for f in ["README.md", "ACQUISITION.md", "claim_result_matrix.json", "LICENSE", ".gitignore"]:
@@ -260,6 +263,11 @@ def test_publish_evidence_only():
               and "redistribute" in (dest / "ACQUISITION.md").read_text().lower())
         # The paper's artifacts are gitignored so they can never be committed.
         check("inputs/ is gitignored", "inputs/" in (dest / ".gitignore").read_text())
+        cff = (dest / "CITATION.cff").read_text()
+        check("CITATION cites the original authors", "Doe, Jane" in cff and "Roe, Rick" in cff)
+        check("CITATION references the original paper", "A Great Paper" in cff and "10.1/xyz" in cff)
+        check("README credits the original authors", "Doe, Jane" in (dest / "README.md").read_text())
+        check("README foregrounds honest results", "reported honestly" in (dest / "README.md").read_text())
 
 
 def test_publish_refuses_secrets_and_pii():

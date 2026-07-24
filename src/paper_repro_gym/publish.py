@@ -20,11 +20,56 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Evidence files copied verbatim from a bundle. Deliberately excludes inputs/
-# (the paper's artifacts) — those are never redistributed.
+# (the paper's artifacts) — those are never redistributed. CITATION.cff is NOT
+# copied from the bundle: it is generated to cite the ORIGINAL paper.
 EVIDENCE_FILES = [
     "claim_result_matrix.json", "experiment_manifest.json", "provenance.json",
-    "summary.json", "REPRODUCIBILITY.md", "CITATION.cff", "LICENSE",
+    "summary.json", "REPRODUCIBILITY.md", "LICENSE",
 ]
+
+
+def _authors_list(authors: str) -> list[str]:
+    """Split an authors string ('Anscombe, F.J.; Doe, J.') into names.
+    Semicolon-separated to avoid splitting 'Last, First' on the comma."""
+    parts = [a.strip() for a in (authors or "").split(";") if a.strip()]
+    return parts or ([authors.strip()] if authors and authors.strip() else [])
+
+
+def _citation_cff(citation: dict, verdict: str) -> str:
+    """A CITATION.cff for the REPRODUCTION that cites the ORIGINAL paper as a
+    reference, so anyone citing this repo is pointed at the authors' work."""
+    orig_authors = _authors_list(citation.get("authors", ""))
+    lines = [
+        "cff-version: 1.2.0",
+        'message: "This is an independent reproduction. Please cite BOTH this'
+        ' reproduction and the original paper listed under references."',
+        f'title: "Reproduction of: {citation.get("title") or citation.get("paper_id")}"',
+        "type: dataset",
+        f'abstract: "Independent reproduction (verdict: {verdict}) of the paper below,'
+        ' produced with paper-repro-gym. Evidence only; the original artifacts are'
+        ' not redistributed."',
+        "authors:",
+        f'  - name: "{citation.get("reproducer") or "reproduction author"}"',
+        "license: MIT",
+        "references:",
+        "  - type: article",
+        f'    title: "{citation.get("title") or "(title unavailable)"}"',
+    ]
+    if orig_authors:
+        lines.append("    authors:")
+        for a in orig_authors:
+            lines.append(f'      - name: "{a}"')
+    else:
+        lines += ["    authors:", '      - name: "(original authors — see the paper)"']
+    if citation.get("year"):
+        lines.append(f'    year: {citation["year"]}')
+    if citation.get("venue"):
+        lines.append(f'    journal: "{citation["venue"]}"')
+    if citation.get("doi"):
+        lines.append(f'    doi: "{citation["doi"]}"')
+    if citation.get("url"):
+        lines.append(f'    url: "{citation["url"]}"')
+    return "\n".join(lines) + "\n"
 
 # Hard secret / PII patterns. A single match refuses the build. Host paths are
 # included because an absolute /home/<user> path leaks a username and the local
@@ -82,14 +127,18 @@ class PublishBlocked(RuntimeError):
 
 
 def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
-                       paper_url: str, gym_url: str) -> dict:
+                       paper_url: str, gym_url: str, citation: dict | None = None) -> dict:
     """Assemble an evidence-only reproduction repo at `dest`. Scans for secrets
     and REFUSES (PublishBlocked) if any are found. Does not touch git or the
-    network — that is the caller's separately-gated step."""
+    network — that is the caller's separately-gated step.
+
+    `citation` (authors/title/year/venue/doi/reproducer) drives a CITATION.cff
+    that credits the ORIGINAL paper, and a citation block in the README."""
     if not (bundle_dir / "claim_result_matrix.json").exists():
         raise FileNotFoundError(f"not a bundle: {bundle_dir}")
     matrix = json.loads((bundle_dir / "claim_result_matrix.json").read_text(encoding="utf-8"))
     verdict = matrix.get("overall_verdict", "INCONCLUSIVE")
+    citation = {**(citation or {}), "paper_id": paper_id, "url": paper_url}
 
     dest.mkdir(parents=True, exist_ok=True)
     for name in EVIDENCE_FILES:
@@ -99,7 +148,9 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
     if (bundle_dir / "logs").is_dir():
         shutil.copytree(bundle_dir / "logs", dest / "logs", dirs_exist_ok=True)
 
-    (dest / "README.md").write_text(_readme(paper_id, paper_url, gym_url, verdict, matrix), encoding="utf-8")
+    # Cite the ORIGINAL paper (not the gym) — academic-integrity requirement.
+    (dest / "CITATION.cff").write_text(_citation_cff(citation, verdict), encoding="utf-8")
+    (dest / "README.md").write_text(_readme(paper_id, paper_url, gym_url, verdict, matrix, citation), encoding="utf-8")
     (dest / "ACQUISITION.md").write_text(_acquisition(paper_id, paper_url), encoding="utf-8")
     (dest / ".gitignore").write_text("inputs/\n*.tar*\n*.ckpt\n*.pt\n*.pth\n*.safetensors\n__pycache__/\n", encoding="utf-8")
 
@@ -114,21 +165,51 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
             "files": sorted(p.name for p in dest.iterdir() if p.is_file())}
 
 
-def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str, matrix: dict) -> str:
+def _format_citation(citation: dict) -> str:
+    """A one-line human citation of the original paper."""
+    authors = "; ".join(_authors_list(citation.get("authors", ""))) or "(authors — see paper)"
+    bits = [authors]
+    if citation.get("year"):
+        bits.append(f"({citation['year']})")
+    if citation.get("title"):
+        bits.append(f"*{citation['title']}*.")
+    if citation.get("venue"):
+        bits.append(f"{citation['venue']}.")
+    if citation.get("doi"):
+        bits.append(f"https://doi.org/{citation['doi']}")
+    elif citation.get("url"):
+        bits.append(citation["url"])
+    return " ".join(bits)
+
+
+def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
+            matrix: dict, citation: dict) -> str:
     rows = matrix.get("claims", [])
+    reproduced = sum(1 for r in rows if r.get("verdict") == "REPRODUCED")
     lines = [
-        f"# Reproduction: {paper_id}", "",
-        f"**Verdict: {verdict}**", "",
-        f"An independent *reproduction* (ACM \"Results Reproduced\") of "
-        f"[{paper_id}]({paper_url}) — re-running the authors' own artifacts and "
-        f"checking the reported numbers against tolerances registered before the run.",
+        f"# Reproduction: {citation.get('title') or paper_id}", "",
+        f"**Verdict: {verdict}**  ({reproduced}/{len(rows)} claims reproduced within their"
+        " pre-registered tolerance)", "",
+        f"An independent *reproduction* (ACM \"Results Reproduced\") — re-running the "
+        f"authors' own artifacts and checking the reported numbers against tolerances "
+        f"registered **before** the run.",
+        "",
+        "## Paper reproduced", "",
+        f"> {_format_citation(citation)}", "",
+        f"Original work by the authors above; all credit for the research is theirs. "
+        f"This repository is an independent reproduction, not the original work, and "
+        f"does not redistribute the paper's code, data, or models — see "
+        f"[ACQUISITION.md](ACQUISITION.md). See [CITATION.cff](CITATION.cff) to cite "
+        f"both this reproduction and the original paper.",
         "",
         f"Produced with [paper-repro-gym]({gym_url}), a gated, containerized "
-        f"reproduction workbench. This repo holds the **evidence only** — the",
-        "paper's code, data, and models are not redistributed here; see",
-        "[ACQUISITION.md](ACQUISITION.md) to obtain them from the official source.",
+        f"reproduction workbench.",
         "",
-        "## Claim / result matrix", "",
+        "## Results (reported honestly)", "",
+        "Every registered claim is shown with its verdict — reproduced, **not "
+        "reproduced**, partial, or inconclusive alike. A failure to reproduce is a "
+        "real, reportable result and is never hidden.",
+        "",
         "| Claim | Metric | Claimed | Observed | Tolerance | Verdict |",
         "|---|---|---|---|---|---|",
     ]

@@ -219,10 +219,15 @@ def cmd_publish(args: argparse.Namespace) -> int:
     (evidence only). Hard-refuses on any secret/PII. Never pushes — prints the
     exact gh command for you to run after review."""
     dest = Path(args.dest).resolve()
+    citation = {
+        "authors": args.authors, "title": args.paper_title, "year": args.paper_year,
+        "venue": args.paper_venue, "doi": args.paper_doi, "reproducer": args.author_name,
+    }
     try:
         summary = publish.build_publish_repo(
             bundle_dir=Path(args.bundle).resolve(), dest=dest,
-            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL)
+            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL,
+            citation=citation)
     except publish.PublishBlocked as exc:
         print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
         return 2
@@ -296,8 +301,14 @@ def build_parser() -> argparse.ArgumentParser:
         ("publish", cmd_publish, [("bundle", {}), ("dest", {}),
                                   ("--paper-id", {"required": True}),
                                   ("--paper-url", {"default": ""}),
+                                  ("--authors", {"default": "", "help": "original authors, semicolon-separated: 'Last, First; ...'"}),
+                                  ("--paper-title", {"default": ""}),
+                                  ("--paper-year", {"default": ""}),
+                                  ("--paper-venue", {"default": "", "help": "journal / conference"}),
+                                  ("--paper-doi", {"default": ""}),
                                   ("--repo-name", {"default": None}),
-                                  ("--author-name", {"default": "reproduction"}),
+                                  ("--author-name", {"default": "reproduction",
+                                   "help": "you, the reproducer (credited separately from the original authors)"}),
                                   ("--author-email", {"default": None,
                                    "help": "use your GitHub <id>+<user>@users.noreply.github.com"})]),
         ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
