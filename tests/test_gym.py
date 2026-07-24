@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from paper_repro_gym import core, bundle, cli, scaffold, publish, index as index_mod  # noqa: E402
+from paper_repro_gym import core, bundle, cli, scaffold, publish, index as index_mod, hf_publish  # noqa: E402
 
 SECRET = "unit-test-secret"
 
@@ -312,6 +312,31 @@ def test_publish_refuses_secrets_and_pii():
         check("relative structure kept as evidence", "repro/inputs:/inputs:ro" in run)
 
 
+def test_hf_dataset_card():
+    check("arxiv id from paper_id", hf_publish.arxiv_id_from("arxiv:2601.12345", "") == "2601.12345")
+    check("arxiv id from url", hf_publish.arxiv_id_from("x", "https://arxiv.org/abs/2601.99999") == "2601.99999")
+    check("no arxiv id -> None", hf_publish.arxiv_id_from("doi:10.1/x", "https://doi.org/10.1/x") is None)
+    # A DOI that happens to contain a YYMM.NNNNN-shaped substring must NOT match.
+    check("DOI digits are not an arxiv id",
+          hf_publish.arxiv_id_from("doi:10.1080/00031305.1973.10478966",
+                                   "https://doi.org/10.1080/00031305.1973.10478966") is None)
+
+    fm = hf_publish.dataset_card_frontmatter(
+        {"title": "A Paper"}, "REPRODUCED", "2601.12345")
+    check("frontmatter is YAML block", fm.startswith("---\n") and "\n---\n" in fm)
+    check("license mit", "license: mit" in fm)
+    check("arxiv tag present", "arxiv: 2601.12345" in fm)
+    check("verdict tag present", "verdict-reproduced" in fm)
+
+    with tempfile.TemporaryDirectory() as t:
+        r = Path(t) / "README.md"
+        r.write_text("# Reproduction\n\nbody\n")
+        hf_publish.add_card_frontmatter(r, fm)
+        check("card prepended", r.read_text().startswith("---\n"))
+        hf_publish.add_card_frontmatter(r, fm)  # idempotent
+        check("carding is idempotent", r.read_text().count("license: mit") == 1)
+
+
 def test_index_bench():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -408,7 +433,7 @@ def main() -> int:
              test_digest_pinning, test_scan_gate_blocks_run,
              test_bundle_records_digest_and_boundary,
              test_publish_evidence_only, test_publish_refuses_secrets_and_pii,
-             test_index_bench,
+             test_hf_dataset_card, test_index_bench,
              test_scaffold_selects_from_packet, test_claim_evaluation,
              test_bundle_build, test_live_demo]
     failed = 0

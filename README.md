@@ -126,8 +126,10 @@ It never redistributes the paper's code/data/models, and never pushes for you.
 - **Reproducibility**: image digest pinning + digest/boundary in the manifest —
   ✅ done. Next: SPDX SBOM of the image and N-run variance for statistical claims.
 - **Publishing**: `gym publish` emits a standalone, secret-scanned reproduction
-  repo — ✅ done. Next: optional Hugging Face publishing (model/dataset cards,
-  the HF papers ecosystem) for reproductions that produce shareable artifacts.
+  repo (GitHub); `gym publish-hf` publishes the same evidence as a Hugging Face
+  **dataset** with a card (arXiv-tagged into the HF papers ecosystem) — ✅ done.
+  `huggingface_hub` is the only optional dependency, lazily imported so the core
+  stays standard-library only.
 - **Bench**: `gym index <dir>` aggregates every reproduction into one board
   (paper, verdict, claims, boundary) — ✅ done. `--write INDEX.md` for a
   portfolio page.

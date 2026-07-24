@@ -22,7 +22,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from . import core, bundle, scaffold, publish, index as index_mod
+from . import core, bundle, scaffold, publish, index as index_mod, hf_publish
 
 SCAN_BLOCK = ".scan_block"
 GYM_URL = "https://github.com/kowshikgunda71/paper-repro-gym"
@@ -252,6 +252,40 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_publish_hf(args: argparse.Namespace) -> int:
+    """Publish a bundle to Hugging Face as an evidence-only dataset repo.
+    Assembles + secret-scans (same as `gym publish`), adds a dataset card, and
+    uploads. Needs `huggingface_hub` + `huggingface-cli login` (token never in
+    chat). --dry-run stages the carded dir without uploading."""
+    dest = Path(args.dest).resolve()
+    citation = {"authors": args.authors, "title": args.paper_title, "year": args.paper_year,
+                "venue": args.paper_venue, "doi": args.paper_doi, "reproducer": args.author_name}
+    try:
+        summary = publish.build_publish_repo(
+            bundle_dir=Path(args.bundle).resolve(), dest=dest,
+            paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL, citation=citation)
+    except publish.PublishBlocked as exc:
+        print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
+        return 2
+
+    arxiv = hf_publish.arxiv_id_from(args.paper_id, args.paper_url)
+    hf_publish.add_card_frontmatter(
+        dest / "README.md",
+        hf_publish.dataset_card_frontmatter(citation, summary["verdict"], arxiv))
+    print(json.dumps({**summary, "hf_dataset_card": True, "arxiv": arxiv}, indent=2))
+
+    if args.dry_run:
+        print(f"\n--dry-run: carded dataset staged at {dest} (NOT uploaded).")
+        return 0
+    try:
+        url = hf_publish.publish_dataset(dest, args.repo_id, private=args.private)
+    except RuntimeError as exc:
+        print(f"\nHF upload not done: {exc}", file=sys.stderr)
+        return 1
+    print(f"\nPublished to Hugging Face: {url}")
+    return 0
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     """The reproducibility bench: aggregate every reproduction under a directory."""
     idx = index_mod.build_index(Path(args.dir).resolve())
@@ -313,6 +347,19 @@ def build_parser() -> argparse.ArgumentParser:
                                    "help": "use your GitHub <id>+<user>@users.noreply.github.com"})]),
         ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
                                "help": "write the board to a markdown file (e.g. INDEX.md)"})]),
+        ("publish-hf", cmd_publish_hf, [("bundle", {}), ("dest", {}),
+                                        ("--repo-id", {"required": True, "help": "owner/name for the HF dataset"}),
+                                        ("--paper-id", {"required": True}),
+                                        ("--paper-url", {"default": ""}),
+                                        ("--authors", {"default": ""}),
+                                        ("--paper-title", {"default": ""}),
+                                        ("--paper-year", {"default": ""}),
+                                        ("--paper-venue", {"default": ""}),
+                                        ("--paper-doi", {"default": ""}),
+                                        ("--author-name", {"default": "reproduction"}),
+                                        ("--private", {"action": "store_true"}),
+                                        ("--dry-run", {"action": "store_true",
+                                         "help": "stage the carded dataset without uploading"})]),
         ("demo", cmd_demo, []),
     ]:
         sp = sub.add_parser(name)
