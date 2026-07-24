@@ -22,7 +22,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from paper_repro_gym import core, bundle, cli, scaffold, publish  # noqa: E402
+from paper_repro_gym import core, bundle, cli, scaffold, publish, index as index_mod  # noqa: E402
 
 SECRET = "unit-test-secret"
 
@@ -304,6 +304,30 @@ def test_publish_refuses_secrets_and_pii():
         check("relative structure kept as evidence", "repro/inputs:/inputs:ro" in run)
 
 
+def test_index_bench():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        def repo(name, verdict, boundary, claims):
+            d = root / name; d.mkdir()
+            (d / "claim_result_matrix.json").write_text(json.dumps({
+                "paper_id": name, "overall_verdict": verdict, "evaluated_at": "2026-07-24T00:00:00Z",
+                "claims": [{"verdict": "REPRODUCED"}] * claims}), encoding="utf-8")
+            (d / "experiment_manifest.json").write_text(json.dumps({"boundary": boundary}), encoding="utf-8")
+        repo("repro-a", "REPRODUCED", "hardened", 3)
+        repo("repro-b", "NOT_REPRODUCED", "hardened", 1)
+        repo("repro-c", "REPRODUCED", "weak", 2)
+
+        idx = index_mod.build_index(root)
+        check("counts all three", idx["summary"]["total"] == 3)
+        check("2 reproduced", idx["summary"]["REPRODUCED"] == 2)
+        check("1 not reproduced", idx["summary"]["NOT_REPRODUCED"] == 1)
+        check("records boundary", all(e["boundary"] in ("hardened", "weak") for e in idx["entries"]))
+        md = index_mod.render_md(idx)
+        check("markdown has a table row per repro", md.count("| repro-") == 3)
+        check("markdown shows the verdict", "REPRODUCED" in md and "NOT_REPRODUCED" in md)
+        check("empty dir is handled", index_mod.build_index(root / "nope")["summary"]["total"] == 0)
+
+
 def test_scaffold_selects_from_packet():
     packet = {"dossiers": [
         {"dossier_id": "ARC-1", "identifier": "a", "recommendation": "manual_review", "paper": {"title": "A"}},
@@ -376,6 +400,7 @@ def main() -> int:
              test_digest_pinning, test_scan_gate_blocks_run,
              test_bundle_records_digest_and_boundary,
              test_publish_evidence_only, test_publish_refuses_secrets_and_pii,
+             test_index_bench,
              test_scaffold_selects_from_packet, test_claim_evaluation,
              test_bundle_build, test_live_demo]
     failed = 0

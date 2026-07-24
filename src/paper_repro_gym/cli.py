@@ -22,7 +22,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from . import core, bundle, scaffold, publish
+from . import core, bundle, scaffold, publish, index as index_mod
 
 SCAN_BLOCK = ".scan_block"
 GYM_URL = "https://github.com/kowshikgunda71/paper-repro-gym"
@@ -247,6 +247,18 @@ def cmd_publish(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_index(args: argparse.Namespace) -> int:
+    """The reproducibility bench: aggregate every reproduction under a directory."""
+    idx = index_mod.build_index(Path(args.dir).resolve())
+    md = index_mod.render_md(idx)
+    if args.write:
+        Path(args.write).write_text(md, encoding="utf-8")
+        print(f"wrote {args.write} ({idx['summary']['total']} reproduction(s))")
+    else:
+        print(md)
+    return 0
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
     """Run the bundled hello_repro example through the whole gated flow, to
     prove the machinery end to end. Uses an ephemeral approval secret."""
@@ -288,6 +300,8 @@ def build_parser() -> argparse.ArgumentParser:
                                   ("--author-name", {"default": "reproduction"}),
                                   ("--author-email", {"default": None,
                                    "help": "use your GitHub <id>+<user>@users.noreply.github.com"})]),
+        ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
+                               "help": "write the board to a markdown file (e.g. INDEX.md)"})]),
         ("demo", cmd_demo, []),
     ]:
         sp = sub.add_parser(name)

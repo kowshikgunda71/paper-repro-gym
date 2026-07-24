@@ -127,6 +127,9 @@ It never redistributes the paper's code/data/models, and never pushes for you.
 - **Publishing**: `gym publish` emits a standalone, secret-scanned reproduction
   repo — ✅ done. Next: optional Hugging Face publishing (model/dataset cards,
   the HF papers ecosystem) for reproductions that produce shareable artifacts.
+- **Bench**: `gym index <dir>` aggregates every reproduction into one board
+  (paper, verdict, claims, boundary) — ✅ done. `--write INDEX.md` for a
+  portfolio page.
 - **CI**: GitHub Actions on every push (incl. the live containment canary) — ✅ done.
 - **GPU**: opt-in `--gpus` with VRAM/accelerator caps recorded in the manifest.
 - **Signing**: move from a shared HMAC secret to per-approver keypairs.
