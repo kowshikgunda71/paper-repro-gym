@@ -668,3 +668,53 @@ def test_one_sided_claims_are_not_scored_two_sided():
     check("outside an interval fails", bundle.evaluate_claim(iv, 4.5)["verdict"] == "NOT_REPRODUCED")
     check("absence is still inconclusive",
           bundle.evaluate_claim(lower, None)["verdict"] == "INCONCLUSIVE")
+
+
+def test_tolerance_policy_is_mechanical():
+    """Tolerances must be a function of the paper, not of the reproducer. The
+    objection this answers: 'you picked tolerances that made failures likely.'"""
+    from paper_repro_gym import tolerance as T
+
+    check("rounding floor from printed precision", T.rounding_floor("38") == 0.5)
+    check("floor tracks decimals", T.rounding_floor("0.35") == 0.005)
+    check("percent sign tolerated", T.rounding_floor("21.1%") == 0.05)
+
+    # R1: the paper's own dispersion wins over the default.
+    r1 = T.derive("38", reported_dispersion=12.0, dispersion_kind="min/max over 5 trials")
+    check("R1 uses the paper's dispersion", r1["tolerance"] == 12.0 and r1["rule"] == "R1")
+
+    # R3: no dispersion -> bench-wide constant, identical for every such claim.
+    r3 = T.derive("2.51")
+    check("R3 is the declared constant", abs(r3["tolerance"] - 0.251) < 1e-9 and r3["rule"] == "R3")
+
+    # The floor always applies: never ask for precision the paper never printed.
+    tight = T.derive("0.35", reported_dispersion=0.0001)
+    check("floor raises an over-tight dispersion", tight["tolerance"] == 0.005)
+    check("floor promotion is recorded", "R2" in tight["rule"])
+
+    # R0: structural claims have no measurement noise; the empirical default
+    # would pass almost any implementation, which defeats their purpose.
+    r0 = T.derive("21.1", deterministic=True)
+    check("structural claim gets the rounding interval", r0["tolerance"] == 0.05)
+    check("structural rule recorded", r0["rule"] == "R0")
+    check("structural is far tighter than the empirical default",
+          r0["tolerance"] < T.derive("21.1")["tolerance"])
+
+    # Hand-set tolerances stay legal but must be visible.
+    findings = T.audit([{"id": "C1", "tolerance": 15.0},
+                        {"id": "C2", "tolerance": 0.3, "tolerance_rule": "R3"}])
+    check("hand-set tolerance is flagged", len(findings) == 1 and "C1" in findings[0])
+
+
+def test_underpowered_is_not_the_same_as_failed():
+    """A claim the sample cannot resolve is unfalsifiable, not refuted. Calling it
+    NOT_REPRODUCED asserts evidence against a paper that the data lacks."""
+    from paper_repro_gym import tolerance as T
+    # LTH C1 at n=5: 2-SE band spans both the claimed 38% and ~0%.
+    check("C1 is underpowered, not refuted",
+          T.is_underpowered(observed_mean=21.4, tolerance=21.1, claimed=38.0))
+    # LTH C5: band [0.29, 0.48] excludes both the claimed 0.5 and 0 -> a real result.
+    check("a precise miss is a genuine failure, not underpower",
+          not T.is_underpowered(observed_mean=0.388, tolerance=0.0945, claimed=0.5))
+    check("a precise hit is not underpowered",
+          not T.is_underpowered(observed_mean=0.5, tolerance=0.02, claimed=0.5))
