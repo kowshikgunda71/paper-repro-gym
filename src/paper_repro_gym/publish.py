@@ -28,6 +28,10 @@ EVIDENCE_FILES = [
     # The reproduction SPEC — the exact command + the pre-registered claims.
     # These are the reproducer's own config and contain no paper artifacts.
     "experiment.json", "claims.json",
+    # Adversarial review, when `gym council` was run. Published alongside the
+    # result rather than kept private: a reproduction that survived attack and
+    # one that was never attacked should not look identical to a reader.
+    "council.json", "COUNCIL.md",
 ]
 
 

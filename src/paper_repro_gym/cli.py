@@ -22,7 +22,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from . import core, bundle, scaffold, publish, index as index_mod, hf_publish
+from . import core, bundle, scaffold, publish, index as index_mod, hf_publish, council
 
 SCAN_BLOCK = ".scan_block"
 GYM_URL = "https://github.com/kowshikgunda71/paper-repro-gym"
@@ -335,6 +335,43 @@ def cmd_publish_hf(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_council(args: argparse.Namespace) -> int:
+    """Run the adversarial review council over a finished bundle: a panel of
+    independent reviewers attacks the evidence from five angles, then a judge
+    argues against the panel before ruling.
+
+    The council can DISPUTE a reproduction; it can never certify one, and it
+    never alters the mechanical verdict. Needs `anthropic` + an API key —
+    the only part of the gym that talks to a model.
+
+    Exits 3 when credibility is DISPUTED, so CI can gate on it."""
+    bundle_dir = Path(args.bundle).resolve()
+    if args.panel_model:
+        council.PANEL_MODEL = args.panel_model
+    if args.judge_model:
+        council.JUDGE_MODEL = args.judge_model
+
+    record = council.run_council(bundle_dir)
+    if not args.dry_run:
+        council.write_council(bundle_dir, record)
+
+    print(json.dumps({
+        "paper_id": record["paper_id"],
+        "mechanical_verdict": record["mechanical_verdict"],
+        "credibility": record["credibility"],
+        "objections": len(record["objections"]),
+        "upheld": len(record["upheld"]),
+        "open_checks": len(record["judge"]["open_checks"]),
+        "usage": record["usage"],
+    }, indent=2))
+    if args.dry_run:
+        print(f"\n--dry-run: nothing written to {bundle_dir}.")
+    else:
+        print(f"\nWrote {bundle_dir / 'council.json'} and {bundle_dir / 'COUNCIL.md'}. "
+              f"The verdict ({record['mechanical_verdict']}) is unchanged.")
+    return 3 if record["credibility"] == "DISPUTED" else 0
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     """The reproducibility bench: aggregate every reproduction under a directory."""
     idx = index_mod.build_index(Path(args.dir).resolve())
@@ -457,6 +494,13 @@ def build_parser() -> argparse.ArgumentParser:
                                    "help": "use your GitHub <id>+<user>@users.noreply.github.com"}),
                                   ("--no-code", {"action": "store_true",
                                    "help": "omit the harness code/ (e.g. license-sensitive artifacts)"})]),
+        ("council", cmd_council, [("bundle", {}),
+                                  ("--panel-model", {"default": None,
+                                   "help": "override the panel model (default claude-sonnet-5)"}),
+                                  ("--judge-model", {"default": None,
+                                   "help": "override the judge model (default claude-opus-5)"}),
+                                  ("--dry-run", {"action": "store_true",
+                                   "help": "review and print, but write nothing into the bundle"})]),
         ("index", cmd_index, [("dir", {}), ("--write", {"default": None,
                                "help": "write the board to a markdown file (e.g. INDEX.md)"})]),
         ("clean", cmd_clean, [("path", {}),
@@ -494,6 +538,10 @@ def main(argv: list[str] | None = None) -> int:
     except core.GateError as exc:
         print(f"GATE REFUSED: {exc}", file=sys.stderr)
         return 2
+    except council.CouncilError as exc:
+        # An absent council is reported as absent, never as approval.
+        print(f"COUNCIL DID NOT RUN: {exc}", file=sys.stderr)
+        return 4
 
 
 if __name__ == "__main__":
