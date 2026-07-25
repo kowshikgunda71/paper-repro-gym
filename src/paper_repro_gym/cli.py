@@ -234,6 +234,38 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_remote(args: argparse.Namespace) -> int:
+    """Run an experiment on external compute (Kaggle, ...) when it does not fit
+    the gym's 4-CPU / no-GPU sandbox.
+
+    `preflight` and `submit` scan the payload with the same scanner that gates
+    `gym publish`: handing code to someone else's compute discloses it just as
+    publishing does. Results come home via `gym import-run`, which records
+    `boundary: external:<provider>` rather than claiming containment."""
+    from . import remote
+    payload = Path(args.path).resolve() if args.path else None
+
+    if args.action == "preflight":
+        findings = remote.preflight(payload)
+        print(json.dumps({"path": str(payload), "safe_to_upload": not findings,
+                          "findings": findings[:20]}, indent=2))
+        return 1 if findings else 0
+
+    prov = remote.get(args.provider)
+    try:
+        if args.action == "submit":
+            out = prov.submit(payload)
+        elif args.action == "status":
+            out = prov.status(args.ref)
+        else:
+            out = prov.fetch(args.ref, Path(args.dest or "."))
+    except remote.RemoteBlocked as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(out, indent=2))
+    return 0
+
+
 def cmd_import_run(args: argparse.Namespace) -> int:
     """Score an externally-produced result (e.g. from Colab/Kaggle/an HPC job)
     against this experiment's pre-registered claims, and build a bundle. Use
@@ -291,7 +323,8 @@ def cmd_publish(args: argparse.Namespace) -> int:
         summary = publish.build_publish_repo(
             bundle_dir=Path(args.bundle).resolve(), dest=dest,
             paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL,
-            citation=citation, include_code=not args.no_code)
+            citation=citation, include_code=not args.no_code,
+            kind="replication" if args.replication else "reproduction")
     except publish.PublishBlocked as exc:
         print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
         return 2
@@ -328,7 +361,8 @@ def cmd_publish_hf(args: argparse.Namespace) -> int:
         summary = publish.build_publish_repo(
             bundle_dir=Path(args.bundle).resolve(), dest=dest,
             paper_id=args.paper_id, paper_url=args.paper_url, gym_url=GYM_URL,
-            citation=citation, include_code=not args.no_code)
+            citation=citation, include_code=not args.no_code,
+            kind="replication" if args.replication else "reproduction")
     except publish.PublishBlocked as exc:
         print(f"PUBLISH REFUSED — {exc}", file=sys.stderr)
         return 2
@@ -496,6 +530,11 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--require-hardened", {"action": "store_true",
                            "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
+        ("remote", cmd_remote, [("action", {"choices": ["preflight", "submit", "status", "fetch"]}),
+                                ("--provider", {"default": "kaggle"}),
+                                ("--path", {"default": None, "help": "payload dir to scan/submit"}),
+                                ("--ref", {"default": None, "help": "provider job ref, e.g. user/kernel-slug"}),
+                                ("--dest", {"default": None, "help": "where fetch writes outputs"})]),
         ("import-run", cmd_import_run, [("experiment", {}),
                                         ("--metrics", {"required": True, "help": "metrics.json produced off-box"}),
                                         ("--ran-on", {"required": True, "help": "where it ran, e.g. 'Google Colab (T4)'"}),
@@ -515,7 +554,9 @@ def build_parser() -> argparse.ArgumentParser:
                                   ("--author-email", {"default": None,
                                    "help": "use your GitHub <id>+<user>@users.noreply.github.com"}),
                                   ("--no-code", {"action": "store_true",
-                                   "help": "omit the harness code/ (e.g. license-sensitive artifacts)"})]),
+                                   "help": "omit the harness code/ (e.g. license-sensitive artifacts)"}),
+                                  ("--replication", {"action": "store_true",
+                                   "help": "the harness was re-implemented from the paper's text rather than running the authors' artifacts (ACM \"Results Replicated\")"})]),
         ("council", cmd_council, [("bundle", {}),
                                   ("--panel-model", {"default": None,
                                    "help": "override the panel model (default claude-sonnet-5)"}),
@@ -544,6 +585,9 @@ def build_parser() -> argparse.ArgumentParser:
                                         ("--author-name", {"default": "reproduction"}),
                                         ("--private", {"action": "store_true"}),
                                         ("--no-code", {"action": "store_true"}),
+                                        ("--replication", {"action": "store_true",
+                                         "help": "the harness was re-implemented from the paper's text rather "
+                                                 "than running the authors' artifacts (ACM \"Results Replicated\")"}),
                                         ("--dry-run", {"action": "store_true",
                                          "help": "stage the carded dataset without uploading"})]),
         ("demo", cmd_demo, []),

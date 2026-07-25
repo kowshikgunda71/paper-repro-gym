@@ -42,17 +42,18 @@ def _authors_list(authors: str) -> list[str]:
     return parts or ([authors.strip()] if authors and authors.strip() else [])
 
 
-def _citation_cff(citation: dict, verdict: str) -> str:
+def _citation_cff(citation: dict, verdict: str, kind: str = "reproduction") -> str:
     """A CITATION.cff for the REPRODUCTION that cites the ORIGINAL paper as a
     reference, so anyone citing this repo is pointed at the authors' work."""
+    noun = KINDS[kind]["noun"]
     orig_authors = _authors_list(citation.get("authors", ""))
     lines = [
         "cff-version: 1.2.0",
-        'message: "This is an independent reproduction. Please cite BOTH this'
-        ' reproduction and the original paper listed under references."',
-        f'title: "Reproduction of: {citation.get("title") or citation.get("paper_id")}"',
+        f'message: "This is an independent {noun}. Please cite BOTH this'
+        f' {noun} and the original paper listed under references."',
+        f'title: "{noun.capitalize()} of: {citation.get("title") or citation.get("paper_id")}"',
         "type: dataset",
-        f'abstract: "Independent reproduction (verdict: {verdict}) of the paper below,'
+        f'abstract: "Independent {noun} (verdict: {verdict}) of the paper below,'
         ' produced with paper-repro-gym. Evidence only; the original artifacts are'
         ' not redistributed."',
         "authors:",
@@ -135,13 +136,15 @@ class PublishBlocked(RuntimeError):
 
 def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
                        paper_url: str, gym_url: str, citation: dict | None = None,
-                       include_code: bool = True) -> dict:
+                       include_code: bool = True, kind: str = "reproduction") -> dict:
     """Assemble an evidence-only reproduction repo at `dest`. Scans for secrets
     and REFUSES (PublishBlocked) if any are found. Does not touch git or the
     network — that is the caller's separately-gated step.
 
     `citation` (authors/title/year/venue/doi/reproducer) drives a CITATION.cff
     that credits the ORIGINAL paper, and a citation block in the README."""
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {sorted(KINDS)}, got {kind!r}")
     if not (bundle_dir / "claim_result_matrix.json").exists():
         raise FileNotFoundError(f"not a bundle: {bundle_dir}")
     matrix = json.loads((bundle_dir / "claim_result_matrix.json").read_text(encoding="utf-8"))
@@ -163,9 +166,10 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
         shutil.copytree(bundle_dir / "code", dest / "code", dirs_exist_ok=True)
 
     # Cite the ORIGINAL paper (not the gym) — academic-integrity requirement.
-    (dest / "CITATION.cff").write_text(_citation_cff(citation, verdict), encoding="utf-8")
+    (dest / "CITATION.cff").write_text(_citation_cff(citation, verdict, kind), encoding="utf-8")
     (dest / "README.md").write_text(
-        _readme(paper_id, paper_url, gym_url, verdict, matrix, citation, has_code), encoding="utf-8")
+        _readme(paper_id, paper_url, gym_url, verdict, matrix, citation, has_code, kind),
+        encoding="utf-8")
     (dest / "ACQUISITION.md").write_text(_acquisition(paper_id, paper_url), encoding="utf-8")
     (dest / ".gitignore").write_text("inputs/\n*.tar*\n*.ckpt\n*.pt\n*.pth\n*.safetensors\n__pycache__/\n", encoding="utf-8")
 
@@ -177,7 +181,7 @@ def build_publish_repo(*, bundle_dir: Path, dest: Path, paper_id: str,
         raise PublishBlocked("secret/PII scan blocked publish:\n  " + "\n  ".join(findings[:20]))
 
     return {"dest": str(dest), "verdict": verdict, "paper_id": paper_id,
-            "code_published": has_code,
+            "kind": kind, "code_published": has_code,
             "files": sorted(p.name for p in dest.iterdir() if p.is_file())}
 
 
@@ -198,33 +202,55 @@ def _format_citation(citation: dict) -> str:
     return " ".join(bits)
 
 
+#: ACM's badging terminology distinguishes these, and conflating them overclaims.
+#: A reproduction re-runs the authors' OWN artifacts; a replication re-implements
+#: the experiment from the paper's text on different artifacts. Saying "re-running
+#: the authors' own artifacts" about work that never touched their code is a false
+#: provenance claim, so the wording is selected, not hardcoded.
+KINDS = {
+    "reproduction": {
+        "noun": "reproduction", "verb": "reproduced",
+        "badge": 'An independent *reproduction* (ACM "Results Reproduced") — re-running the '
+                 "authors' own artifacts and checking the reported numbers against tolerances "
+                 "registered **before** the run.",
+    },
+    "replication": {
+        "noun": "replication", "verb": "replicated",
+        "badge": 'An independent *replication* (ACM "Results Replicated") — the experiment was '
+                 "re-implemented from the paper's text by a different team, **without using the "
+                 "authors' code**, and the reported numbers were checked against tolerances "
+                 "registered **before** the run.",
+    },
+}
+
+
 def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
-            matrix: dict, citation: dict, has_code: bool = False) -> str:
+            matrix: dict, citation: dict, has_code: bool = False,
+            kind: str = "reproduction") -> str:
+    k = KINDS[kind]
     rows = matrix.get("claims", [])
     reproduced = sum(1 for r in rows if r.get("verdict") == "REPRODUCED")
     lines = [
-        f"# Reproduction: {citation.get('title') or paper_id}", "",
-        f"**Verdict: {verdict}**  ({reproduced}/{len(rows)} claims reproduced within their"
+        f"# {k['noun'].capitalize()}: {citation.get('title') or paper_id}", "",
+        f"**Verdict: {verdict}**  ({reproduced}/{len(rows)} claims {k['verb']} within their"
         " pre-registered tolerance)", "",
-        f"An independent *reproduction* (ACM \"Results Reproduced\") — re-running the "
-        f"authors' own artifacts and checking the reported numbers against tolerances "
-        f"registered **before** the run.",
+        k["badge"],
         "",
-        "## Paper reproduced", "",
+        f"## Paper {k['verb']}", "",
         f"> {_format_citation(citation)}", "",
         f"Original work by the authors above; all credit for the research is theirs. "
-        f"This repository is an independent reproduction, not the original work, and "
+        f"This repository is an independent {k['noun']}, not the original work, and "
         f"does not redistribute the paper's code, data, or models — see "
         f"[ACQUISITION.md](ACQUISITION.md). See [CITATION.cff](CITATION.cff) to cite "
-        f"both this reproduction and the original paper.",
+        f"both this {k['noun']} and the original paper.",
         "",
         f"Produced with [paper-repro-gym]({gym_url}), a gated, containerized "
-        f"reproduction workbench.",
+        f"{k['noun']} workbench.",
         "",
         "## Results (reported honestly)", "",
-        "Every registered claim is shown with its verdict — reproduced, **not "
-        "reproduced**, partial, or inconclusive alike. A failure to reproduce is a "
-        "real, reportable result and is never hidden.",
+        f"Every registered claim is shown with its verdict — {k['verb']}, **not "
+        f"{k['verb']}**, partial, or inconclusive alike. A failure to {k['verb'][:-1]} is a "
+        f"real, reportable result and is never hidden.",
         "",
         "| Claim | Metric | Claimed | Observed | Tolerance | Verdict |",
         "|---|---|---|---|---|---|",
@@ -234,12 +260,12 @@ def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
             f"| {str(r.get('description',''))[:40]} | {r.get('metric')} | {r.get('claimed_value')} | "
             f"{r.get('observed_value')} | {r.get('tolerance')} ({r.get('tolerance_kind')}) | {r.get('verdict')} |")
     lines += [
-        "", "## How it was reproduced", "",
+        f"", f"## How it was {k['verb']}", "",
         "- `experiment.json` — the exact image and command that was run.",
         "- `claims.json` — the claims and tolerances, registered before the run.",
     ]
     if has_code:
-        lines.append("- `code/` — the reproduction harness (the scripts that were run). "
+        lines.append(f"- `code/` — the {k['noun']} harness (the scripts that were run). "
                      "This is the reproducer's own code; the paper's artifacts are **not** "
                      "redistributed (see [ACQUISITION.md](ACQUISITION.md)).")
     else:
@@ -251,14 +277,14 @@ def _readme(paper_id: str, paper_url: str, gym_url: str, verdict: str,
         "- `claim_result_matrix.json` — claimed vs observed vs pre-registered tolerance",
         "- `experiment_manifest.json` — image (by digest), command, hashes, resource use, boundary",
         "- `provenance.json` — SLSA-subset build provenance",
-        "- `REPRODUCIBILITY.md` — how to reproduce this reproduction",
+        f"- `REPRODUCIBILITY.md` — how to reproduce this {k['noun']}",
         "- `logs/` — raw run record, stdout, stderr",
         "",
         "## Reproduce it yourself", "",
         f"Clone [paper-repro-gym]({gym_url}), acquire the artifacts per ACQUISITION.md,",
         "and run the command in `experiment_manifest.json` on a hardened boundary.",
         "",
-        "A failure to reproduce is a real, reportable result — this record states the",
+        f"A failure to {k['verb'][:-1]} is a real, reportable result — this record states the",
         "verdict honestly, whatever it was.",
         "",
     ]

@@ -271,6 +271,39 @@ def test_publish_evidence_only():
         check("README foregrounds honest results", "reported honestly" in (dest / "README.md").read_text())
 
 
+def test_publish_replication_does_not_claim_authors_artifacts():
+    """A replication re-implements the experiment from the paper's text; it never
+    touches the authors' code. Describing it as 'running the authors' own
+    artifacts' is a false provenance claim, so the wording must follow the kind."""
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        cite = {"authors": "Doe, Jane", "title": "A Great Paper", "reproducer": "someone"}
+        rep = publish.build_publish_repo(
+            bundle_dir=_make_bundle(t), dest=t / "repl", paper_id="arxiv:2601.1",
+            paper_url="u", gym_url="g", citation=cite, kind="replication")
+        text = (t / "repl" / "README.md").read_text()
+        check("kind recorded", rep["kind"] == "replication")
+        check("no false artifact-provenance claim", "authors' own artifacts" not in text)
+        check("badged as a replication", "Results Replicated" in text)
+        check("says the authors' code was not used", "without using the" in text)
+        check("CITATION.cff says replication", "replication" in (t / "repl" / "CITATION.cff").read_text())
+
+        # The default is unchanged, so existing reproductions keep their wording.
+        publish.build_publish_repo(
+            bundle_dir=_make_bundle(t / "b2"), dest=t / "repro", paper_id="arxiv:2601.1",
+            paper_url="u", gym_url="g", citation=cite)
+        check("reproduction wording preserved by default",
+              "authors' own artifacts" in (t / "repro" / "README.md").read_text())
+
+        try:
+            publish.build_publish_repo(
+                bundle_dir=_make_bundle(t / "b3"), dest=t / "bad", paper_id="p",
+                paper_url="u", gym_url="g", kind="reimplementation")
+            check("unknown kind rejected", False)
+        except ValueError:
+            check("unknown kind rejected", True)
+
+
 def test_publish_refuses_secrets_and_pii():
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
@@ -567,3 +600,43 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def test_remote_refuses_to_upload_secrets():
+    """Uploading a payload to third-party compute has the same disclosure
+    consequence as publishing it, so it must hit the same scanner. The failure
+    this pins: an API token riding along inside a harness or notebook."""
+    from paper_repro_gym import remote
+
+    calls = []
+    prov = remote.get("kaggle", runner=lambda a: calls.append(a) or "successfully pushed")
+
+    with tempfile.TemporaryDirectory() as td:
+        clean = Path(td) / "clean"; clean.mkdir()
+        (clean / "harness.py").write_text("print('hello')\n", encoding="utf-8")
+        res = prov.submit(clean)
+        check("clean payload submits", res["submitted"] and res["scanned"])
+        check("push actually invoked", any("push" in c for c in calls))
+
+        dirty = Path(td) / "dirty"; dirty.mkdir()
+        (dirty / "nb.py").write_text("KEY = 'gh" + "p_" + "A" * 24 + "'\n", encoding="utf-8")
+        before = len(calls)
+        try:
+            prov.submit(dirty)
+            check("secret payload refused", False)
+        except remote.RemoteBlocked:
+            check("secret payload refused", True)
+        check("no upload attempted after refusal", len(calls) == before)
+
+    check("unknown provider rejected",
+          _raises(lambda: remote.get("nope"), ValueError))
+
+
+def _raises(fn, exc):
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
