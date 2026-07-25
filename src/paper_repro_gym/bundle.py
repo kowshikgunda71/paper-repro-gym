@@ -51,8 +51,24 @@ def evaluate_claim(claim: dict, observed: float | None) -> dict:
     """Compare one observed value against a pre-registered claim + tolerance.
 
     A claim: {id, description, section, metric, claimed_value, tolerance,
-              tolerance_kind: "abs"|"rel"}. Returns a verdict row. INCONCLUSIVE
-    when the run produced no value for the metric -- absence is not failure.
+              tolerance_kind: "abs"|"rel"|"lower_bound"|"upper_bound"|"interval"}.
+    Returns a verdict row. INCONCLUSIVE when the run produced no value for the
+    metric -- absence is not failure.
+
+    DIRECTION MATTERS. Papers state plenty of one-sided claims -- "improving by
+    MORE THAN 0.3 points", "a speedup of UP TO 3.5x" -- and scoring those
+    two-sided is wrong in both directions: it rejects an observation that
+    overshoots (0.9 against a "more than 0.3" claim is a pass, not a failure)
+    and it accepts one that undershoots the stated bound. A two-sided default
+    silently invented an upper bound the paper never claimed in this tool's own
+    first published replication. Register the direction the paper actually used:
+
+      lower_bound  "at least / more than X"  -> pass if observed >= X - tol
+      upper_bound  "at most / up to X"       -> pass if observed <= X + tol
+      interval     "between X and Y"         -> claimed_value=[X, Y], pass inside
+                                                [X - tol, Y + tol]
+    `tol` stays the measurement-noise allowance on the stated bound; it never
+    turns a one-sided claim into a two-sided one.
     """
     claimed = claim.get("claimed_value")
     tol = claim.get("tolerance")
@@ -71,11 +87,27 @@ def evaluate_claim(claim: dict, observed: float | None) -> dict:
         row["verdict"] = "INCONCLUSIVE"
         row["reason"] = "no observed value for the metric" if observed is None else "claim/tolerance not fully specified"
         return row
-    delta = abs(float(observed) - float(claimed))
-    allowed = float(tol) if kind == "abs" else abs(float(claimed)) * float(tol)
-    row["delta"] = round(delta, 6)
-    row["allowed"] = round(allowed, 6)
-    row["verdict"] = "REPRODUCED" if delta <= allowed else "NOT_REPRODUCED"
+
+    obs, tolf = float(observed), float(tol)
+    if kind == "interval":
+        lo, hi = (float(x) for x in claimed)
+        ok = (lo - tolf) <= obs <= (hi + tolf)
+        row["allowed_range"] = [round(lo - tolf, 6), round(hi + tolf, 6)]
+    elif kind == "lower_bound":
+        ok = obs >= float(claimed) - tolf
+        row["allowed_range"] = [round(float(claimed) - tolf, 6), None]
+    elif kind == "upper_bound":
+        ok = obs <= float(claimed) + tolf
+        row["allowed_range"] = [None, round(float(claimed) + tolf, 6)]
+    else:                                        # "abs" | "rel" -- two-sided
+        allowed = tolf if kind == "abs" else abs(float(claimed)) * tolf
+        delta = abs(obs - float(claimed))
+        ok = delta <= allowed
+        row["delta"] = round(delta, 6)
+        row["allowed"] = round(allowed, 6)
+        row["allowed_range"] = [round(float(claimed) - allowed, 6),
+                                round(float(claimed) + allowed, 6)]
+    row["verdict"] = "REPRODUCED" if ok else "NOT_REPRODUCED"
     return row
 
 

@@ -640,3 +640,31 @@ def _raises(fn, exc):
     except Exception:
         return False
     return False
+
+
+def test_one_sided_claims_are_not_scored_two_sided():
+    """Regression for a real defect in this tool's first published replication:
+    the paper claimed 'improving by more than 0.3 percentage points' and it was
+    registered two-sided, which invents an upper bound the paper never stated."""
+    lower = {"id": "C2", "metric": "m", "claimed_value": 0.3,
+             "tolerance": 0.05, "tolerance_kind": "lower_bound"}
+    check("overshoot passes a lower bound", bundle.evaluate_claim(lower, 0.9)["verdict"] == "REPRODUCED")
+    check("at the bound passes", bundle.evaluate_claim(lower, 0.3)["verdict"] == "REPRODUCED")
+    check("undershoot beyond tolerance fails",
+          bundle.evaluate_claim(lower, 0.1)["verdict"] == "NOT_REPRODUCED")
+    # The exact defect: two-sided scoring rejects a clear satisfaction of the claim.
+    two_sided = {**lower, "tolerance_kind": "abs", "tolerance": 0.3}
+    check("two-sided would have wrongly rejected the overshoot",
+          bundle.evaluate_claim(two_sided, 0.9)["verdict"] == "NOT_REPRODUCED")
+
+    upper = {"id": "C6", "metric": "m", "claimed_value": 0.35,
+             "tolerance": 0.05, "tolerance_kind": "upper_bound"}
+    check("under an upper bound passes", bundle.evaluate_claim(upper, 0.1)["verdict"] == "REPRODUCED")
+    check("over an upper bound fails", bundle.evaluate_claim(upper, 0.9)["verdict"] == "NOT_REPRODUCED")
+
+    iv = {"id": "I1", "metric": "m", "claimed_value": [1.0, 4.0],
+          "tolerance": 0.1, "tolerance_kind": "interval"}
+    check("inside an interval passes", bundle.evaluate_claim(iv, 2.5)["verdict"] == "REPRODUCED")
+    check("outside an interval fails", bundle.evaluate_claim(iv, 4.5)["verdict"] == "NOT_REPRODUCED")
+    check("absence is still inconclusive",
+          bundle.evaluate_claim(lower, None)["verdict"] == "INCONCLUSIVE")
