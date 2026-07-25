@@ -22,7 +22,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from paper_repro_gym import core, bundle, cli, scaffold, publish, index as index_mod, hf_publish  # noqa: E402
+from paper_repro_gym import (core, bundle, cli, scaffold, publish, index as index_mod,  # noqa: E402
+                             hf_publish, council as council_mod)
 
 SECRET = "unit-test-secret"
 
@@ -374,6 +375,106 @@ def test_scaffold_selects_from_packet():
         check("ambiguous packet requires an id (no silent first-match)", True)
 
 
+# ── adversarial council ─────────────────────────────────────────────────────
+
+def _fake_ask(panelist_payload, judge_payload, fail_lens=None):
+    """Stand in for the model call so the council's orchestration is testable
+    offline. Returns (parsed, usage) exactly as council._ask does."""
+    def ask(client, *, model, system, prompt, schema, effort, max_tokens):
+        if schema is council_mod.JUDGE_SCHEMA:
+            return dict(judge_payload), {"input_tokens": 10, "output_tokens": 20}
+        if fail_lens and f"YOUR ASSIGNED ANGLE — {fail_lens}" in prompt:
+            raise council_mod.CouncilError("simulated reviewer failure")
+        return dict(panelist_payload), {"input_tokens": 1, "output_tokens": 2}
+    return ask
+
+
+_OBJ = {"severity": "major", "claim_id": "c1", "statement": "wrong split",
+        "evidence": "claims.json", "falsifiable_check": "rerun on the test split"}
+_JUDGE = {"steelman": "the tolerance was pre-registered", "credibility": "SOUND",
+          "rulings": [{"lens": "metric-identity", "statement": "wrong split",
+                       "ruling": "upheld", "reason": "the split is unstated"}],
+          "rationale": "narrow but standing", "open_checks": ["rerun on the test split"]}
+
+
+def test_council_cannot_change_the_verdict():
+    """The load-bearing property: a council finding never rewrites the mechanical
+    verdict, and never writes into the claim/result matrix."""
+    with tempfile.TemporaryDirectory() as td:
+        b = _make_bundle(Path(td))
+        before = (b / "claim_result_matrix.json").read_text()
+        real_ask, real_client = council_mod._ask, council_mod._client
+        council_mod._ask = _fake_ask({"objections": [_OBJ], "no_objection_reason": ""}, _JUDGE)
+        council_mod._client = lambda: object()
+        try:
+            rec = council_mod.run_council(b)
+            council_mod.write_council(b, rec)
+        finally:
+            council_mod._ask, council_mod._client = real_ask, real_client
+
+        check("matrix untouched by the council", (b / "claim_result_matrix.json").read_text() == before)
+        check("mechanical verdict carried verbatim", rec["mechanical_verdict"] == "REPRODUCED")
+        check("council record has no verdict field to write",
+              "overall_verdict" not in rec and "verdict" not in rec)
+        check("judge schema exposes no verdict field",
+              "verdict" not in council_mod.JUDGE_SCHEMA["properties"])
+        check("every panel lens reported", len(rec["panel"]) == len(council_mod.PANEL))
+        check("objections aggregated across the panel",
+              len(rec["objections"]) == len(council_mod.PANEL))
+        check("upheld rulings surfaced", len(rec["upheld"]) == 1)
+        check("council.json + COUNCIL.md written",
+              (b / "council.json").exists() and (b / "COUNCIL.md").exists())
+        md = (b / "COUNCIL.md").read_text()
+        check("md says the verdict is unchanged", "cannot alter it" in md)
+        check("md carries the open checks", "rerun on the test split" in md)
+
+
+def test_council_downgrades_when_a_reviewer_fails():
+    """A panel that did not fully report must not read as a clean sweep."""
+    with tempfile.TemporaryDirectory() as td:
+        b = _make_bundle(Path(td))
+        real_ask, real_client = council_mod._ask, council_mod._client
+        council_mod._ask = _fake_ask({"objections": [], "no_objection_reason": "held up"},
+                                     _JUDGE, fail_lens="result-leakage")
+        council_mod._client = lambda: object()
+        try:
+            rec = council_mod.run_council(b)
+        finally:
+            council_mod._ask, council_mod._client = real_ask, real_client
+        check("SOUND downgraded to QUALIFIED", rec["credibility"] == "QUALIFIED")
+        check("the failed lens is named", "result-leakage" in rec["judge"]["rationale"])
+        check("failure recorded on the panelist",
+              any(p.get("error") for p in rec["panel"] if p["lens"] == "result-leakage"))
+
+
+def test_council_refuses_non_bundle_and_flags_missing_code():
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        try:
+            council_mod.run_council(t)
+            check("refuses a directory that is not a bundle", False)
+        except council_mod.CouncilError as exc:
+            check("refuses a directory that is not a bundle", "not a reproduction bundle" in str(exc))
+        b = _make_bundle(t)
+        ev = council_mod.gather_evidence(b)
+        check("uncaptured harness code is stated, not silently omitted", "NOT CAPTURED" in ev)
+        check("evidence includes the claim matrix", "claim_result_matrix.json" in ev)
+
+
+def test_index_shows_review_state():
+    with tempfile.TemporaryDirectory() as td:
+        t = Path(td)
+        b = _make_bundle(t)
+        idx = index_mod.build_index(t)
+        check("unreviewed bundle reads as not reviewed",
+              "not reviewed" in index_mod.render_md(idx))
+        (b / "council.json").write_text(json.dumps(
+            {"credibility": "DISPUTED", "upheld": [{"lens": "x"}, {"lens": "y"}]}), encoding="utf-8")
+        idx = index_mod.build_index(t)
+        check("credibility surfaced on the board", idx["entries"][0]["credibility"] == "DISPUTED")
+        check("upheld count surfaced on the board", "DISPUTED (2)" in index_mod.render_md(idx))
+
+
 # ── bundle scoring ──────────────────────────────────────────────────────────
 
 def test_claim_evaluation():
@@ -435,6 +536,10 @@ def main() -> int:
              test_publish_evidence_only, test_publish_refuses_secrets_and_pii,
              test_hf_dataset_card, test_index_bench,
              test_scaffold_selects_from_packet, test_claim_evaluation,
+             test_council_cannot_change_the_verdict,
+             test_council_downgrades_when_a_reviewer_fails,
+             test_council_refuses_non_bundle_and_flags_missing_code,
+             test_index_shows_review_state,
              test_bundle_build, test_live_demo]
     failed = 0
     for fn in tests:

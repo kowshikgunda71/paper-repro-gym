@@ -30,15 +30,43 @@ the process **honest and mechanical**:
 - the verdict (`REPRODUCED` / `NOT_REPRODUCED` / `PARTIAL` / `INCONCLUSIVE`) is
   computed against the pre-registered tolerance, not eyeballed;
 - every run produces an **evidence bundle** (claim/result matrix, experiment
-  manifest, SLSA-L1 provenance, raw logs, LICENSE, CITATION).
+  manifest, SLSA-L1 provenance, raw logs, LICENSE, CITATION);
+- an optional **adversarial council** then attacks that bundle looking for the
+  ways the tolerance check can be satisfied without the result being real.
 
 Negative and inconclusive results are first-class: a failure to reproduce is a
 finding, and hitting a resource cap yields `FAILED_SAFELY`, not a false pass.
 
+## How this differs from the reproduction benchmarks
+
+There is a strong and growing family of benchmarks that ask *can an AI agent
+reproduce a paper?* — [PaperBench](https://arxiv.org/abs/2504.01848) (20 ICML
+papers, 8,316 gradable rubric items co-developed with the original authors),
+[CORE-Bench](https://arxiv.org/abs/2409.11363) (270 tasks over 90 papers),
+[ResearchCodeBench](https://arxiv.org/abs/2506.02314), and newer entrants like
+NatureBench, ReplicatorBench and AstaBench.
+
+**Those grade the agent. This grades the reproduction.** A benchmark needs a
+fixed task set with known answers, so it can only ever cover papers someone has
+already curated. This is the workbench you point at *your* paper — the one
+nobody has built a rubric for — and it optimizes for a different output: not a
+score, but an artifact a skeptical reader can check.
+
+The specific thing it adds, which none of the benchmarks and none of the
+preregistration platforms (OSF, AsPredicted) currently do for computational
+work: **the tolerance is registered and hash-bound before the run.** Post-hoc
+grading, however good the rubric, is still scored after seeing the number. Here
+the signed A1 approval binds the artifact hash, the exact command, and the
+sandbox policy, so moving the goalposts breaks the signature and the run is
+refused. What it borrows back from PaperBench is the LLM-judge idea — as
+`gym council`, with the deliberate constraint that the judge can *dispute* a
+result but never certify one.
+
 ## Install
 
-Python ≥ 3.11 and Docker. No third-party Python dependencies — standard library
-only.
+Python ≥ 3.11 and Docker. The core is **standard library only**; two commands
+have optional lazily-imported dependencies (`anthropic` for `gym council`,
+`huggingface_hub` for `gym publish-hf`). Everything else runs offline.
 
 ```bash
 git clone https://github.com/kowshikgunda71/paper-repro-gym
@@ -102,6 +130,45 @@ or the policy and the signature no longer verifies — the run is refused.
 free/academic compute:** [docs/COMPUTE.md](docs/COMPUTE.md). **Free & government
 data:** [docs/DATASETS.md](docs/DATASETS.md).
 
+## Adversarial review (`gym council`)
+
+The tolerance check answers exactly one question: did the observed number land
+inside a band registered before the run? That is a real check, and it is narrow.
+It cannot see that the metric came off the wrong split, that the tolerance was
+set so wide nothing could fail, that the harness hard-coded the expected value,
+or that the registered claims dodge the paper's headline result. **Those are the
+ways a reproduction fools itself, and none of them are arithmetic.**
+
+```bash
+pip install --user anthropic && export ANTHROPIC_API_KEY=...
+gym council .gym/bundles/<run_id>
+```
+
+Five independent reviewers (Sonnet) each attack the bundle from one angle —
+metric identity, tolerance laxity, result leakage, containment/provenance, claim
+scope — and a judge (Opus) is required to **argue against the panel** before
+ruling on it. Diverse lenses beat N copies of one reviewer, and forcing a
+steelman first is what stops a panel agreeing with itself from being mistaken
+for evidence. Output: `council.json` + `COUNCIL.md` in the bundle, an evidence
+credibility of `SOUND` / `QUALIFIED` / `DISPUTED` / `UNVERIFIABLE`, and a list of
+**open checks** — concrete things someone could run to settle what's disputed.
+
+> **The council can dispute, never certify.** A council finding never changes
+> `overall_verdict`. This is structural, not a prompt instruction: the judge's
+> schema has no verdict field to write, and the module never opens
+> `claim_result_matrix.json` for writing. An LLM panel can raise doubt about a
+> number; it cannot manufacture one. Every objection must carry a
+> `falsifiable_check` — an objection nobody can run is an opinion, and opinions
+> don't belong in an evidence bundle.
+
+Failure modes are reported, never smoothed over: a reviewer that doesn't report
+downgrades `SOUND` to `QUALIFIED` (a partial panel is not a clean sweep), a
+missing harness `code/` directory is stated as uncheckable rather than assumed
+fine, and a model refusal aborts with exit 4 instead of returning "no
+objections". `gym council` exits 3 on `DISPUTED`, so CI can gate on it.
+`gym index` shows the review state per reproduction; unreviewed bundles read as
+`not reviewed`, never as approved.
+
 ## Publishing a reproduction
 
 This repo is the **tool**. Each paper you reproduce becomes **its own separate
@@ -131,9 +198,13 @@ It never redistributes the paper's code/data/models, and never pushes for you.
   **dataset** with a card (arXiv-tagged into the HF papers ecosystem) — ✅ done.
   `huggingface_hub` is the only optional dependency, lazily imported so the core
   stays standard-library only.
+- **Review**: `gym council` — a five-lens adversarial panel (Sonnet) plus a
+  contradicting judge (Opus) that attacks the evidence bundle and can dispute
+  but never certify a reproduction — ✅ done. Next: replaying a council over an
+  older bundle to measure reviewer drift, and cross-model panels.
 - **Bench**: `gym index <dir>` aggregates every reproduction into one board
-  (paper, verdict, claims, boundary) — ✅ done. `--write INDEX.md` for a
-  portfolio page.
+  (paper, verdict, review state, claims, boundary) — ✅ done.
+  `--write INDEX.md` for a portfolio page.
 - **CI**: GitHub Actions on every push (incl. the live containment canary) — ✅ done.
 - **GPU**: opt-in `--gpus` with VRAM/accelerator caps recorded in the manifest.
 - **Signing**: move from a shared HMAC secret to per-approver keypairs.
