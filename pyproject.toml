@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-repro-gym"
+version = "0.1.0"
+description = "A gated, containerized workbench for reproducing research-paper results against tolerances registered before the run"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "kowshikgunda71" }]
+keywords = ["reproducibility", "research", "open-science", "provenance", "containers"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+]
+
+# The core is standard-library only, on purpose: an offline tool with no supply
+# chain is one less thing a reproduction has to trust. The two optional extras
+# are lazily imported and never needed to run, score, or bundle a reproduction.
+dependencies = []
+
+[project.optional-dependencies]
+council = ["anthropic>=0.69"]   # gym council — the only stage that calls a model
+hf = ["huggingface_hub>=0.24"]  # gym publish-hf
+
+[project.urls]
+Homepage = "https://github.com/kowshikgunda71/paper-repro-gym"
+Issues = "https://github.com/kowshikgunda71/paper-repro-gym/issues"
+
+[project.scripts]
+gym = "paper_repro_gym.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -424,6 +424,9 @@ def test_council_cannot_change_the_verdict():
         check("upheld rulings surfaced", len(rec["upheld"]) == 1)
         check("council.json + COUNCIL.md written",
               (b / "council.json").exists() and (b / "COUNCIL.md").exists())
+        check("review bound to the evidence it read",
+              rec["evidence_sha256"] == council_mod.evidence_hash(b))
+        check("a fresh review is not stale", council_mod.review_state(b)["stale"] is False)
         md = (b / "COUNCIL.md").read_text()
         check("md says the verdict is unchanged", "cannot alter it" in md)
         check("md carries the open checks", "rerun on the test split" in md)
@@ -469,10 +472,20 @@ def test_index_shows_review_state():
         check("unreviewed bundle reads as not reviewed",
               "not reviewed" in index_mod.render_md(idx))
         (b / "council.json").write_text(json.dumps(
-            {"credibility": "DISPUTED", "upheld": [{"lens": "x"}, {"lens": "y"}]}), encoding="utf-8")
+            {"credibility": "DISPUTED", "upheld": [{"lens": "x"}, {"lens": "y"}],
+             "evidence_sha256": council_mod.evidence_hash(b)}), encoding="utf-8")
         idx = index_mod.build_index(t)
         check("credibility surfaced on the board", idx["entries"][0]["credibility"] == "DISPUTED")
         check("upheld count surfaced on the board", "DISPUTED (2)" in index_mod.render_md(idx))
+
+        # The evidence changes after the review -> the old verdict must not stand.
+        (b / "summary.json").write_text('{"overall_verdict": "REPRODUCED"}', encoding="utf-8")
+        state = council_mod.review_state(b)
+        check("changed evidence detected as stale", state["stale"] is True)
+        idx = index_mod.build_index(t)
+        check("stale review is not shown as credibility", idx["entries"][0]["credibility"] is None)
+        check("stale review reads as stale, not as approval",
+              "stale review" in index_mod.render_md(idx))
 
 
 # ── bundle scoring ──────────────────────────────────────────────────────────

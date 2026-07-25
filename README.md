@@ -71,13 +71,19 @@ have optional lazily-imported dependencies (`anthropic` for `gym council`,
 ```bash
 git clone https://github.com/kowshikgunda71/paper-repro-gym
 cd paper-repro-gym
+pip install -e .                   # puts `gym` on your PATH; core has no deps
 python3 tests/test_gym.py          # offline tests (+ live demo if docker present)
 ```
+
+Install **editable**: the tool reads `LICENSE`, `CITATION.cff` and `examples/`
+from the checkout to stamp into bundles, and says so loudly rather than writing
+an incomplete bundle if they're missing. Optional extras:
+`pip install -e '.[council]'` (adversarial review) and `.[hf]` (HF publishing).
 
 ## Quickstart — the built-in example
 
 ```bash
-PYTHONPATH=src python3 -m paper_repro_gym.cli --workdir .gym demo
+gym --workdir .gym demo
 ```
 
 `demo` runs the first-party `examples/hello_repro` "paper" (a deterministic
@@ -140,7 +146,7 @@ or that the registered claims dodge the paper's headline result. **Those are the
 ways a reproduction fools itself, and none of them are arithmetic.**
 
 ```bash
-pip install --user anthropic && export ANTHROPIC_API_KEY=...
+pip install -e '.[council]' && export ANTHROPIC_API_KEY=...
 gym council .gym/bundles/<run_id>
 ```
 
@@ -166,8 +172,14 @@ downgrades `SOUND` to `QUALIFIED` (a partial panel is not a clean sweep), a
 missing harness `code/` directory is stated as uncheckable rather than assumed
 fine, and a model refusal aborts with exit 4 instead of returning "no
 objections". `gym council` exits 3 on `DISPUTED`, so CI can gate on it.
-`gym index` shows the review state per reproduction; unreviewed bundles read as
-`not reviewed`, never as approved.
+
+The review is **hash-bound to the evidence it read**, the same discipline the A1
+gate applies to a run: `council.json` records the sha256 of the exact bytes the
+panel saw. Change the bundle afterwards and the review reads as `stale review`,
+never as the old approval. `gym index` shows review state per reproduction —
+`not reviewed`, `stale review`, or the credibility plus upheld-objection count.
+Re-running the council on unchanged evidence is refused without `--force`, since
+it would just re-bill for the same input.
 
 ## Publishing a reproduction
 

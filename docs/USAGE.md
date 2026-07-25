@@ -26,10 +26,11 @@ Requirements: Python ≥ 3.11 and a container runtime. Docker works but is a
 **weak** boundary on a workstation; for real third-party artifacts use rootless
 podman (`docs/PODMAN_UPGRADE.md`).
 
-Add `gym` as a convenience alias:
+Install editable to get the `gym` command:
 
 ```bash
-alias gym='PYTHONPATH=src python3 -m paper_repro_gym.cli --workdir .gym'
+pip install -e .
+alias gym='gym --workdir .gym'   # optional: default the workdir
 ```
 
 ## 1. Check your boundary

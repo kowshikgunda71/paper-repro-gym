@@ -23,7 +23,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      # No pip install — the project is standard-library only.
+      # Editable install: the core has no dependencies, but this puts `gym`
+      # on PATH and checks that the packaging metadata is valid on every push.
+      - name: Install (editable, no dependencies)
+        run: pip install -e .
+
 
       - name: Pre-pull the example image
         # So the live containment canary in the test suite actually runs
@@ -32,7 +36,7 @@ jobs:
         run: docker pull python:3.12-alpine
 
       - name: Report the container boundary
-        run: PYTHONPATH=src python3 -m paper_repro_gym.cli preflight || true
+        run: gym preflight || true
 
       - name: Run tests (offline + live containment canary)
         run: python3 tests/test_gym.py
