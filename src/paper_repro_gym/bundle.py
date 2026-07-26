@@ -108,6 +108,26 @@ def evaluate_claim(claim: dict, observed: float | None) -> dict:
         row["allowed_range"] = [round(float(claimed) - allowed, 6),
                                 round(float(claimed) + allowed, 6)]
     row["verdict"] = "REPRODUCED" if ok else "NOT_REPRODUCED"
+
+    # A claim the sample cannot resolve was never tested, and this applies to a
+    # PASS as much as to a fail -- in fact mostly to passes. A tolerance band
+    # wider than the claimed effect swallows the claim, so the observation lands
+    # inside it almost regardless of what happened, and the run reports
+    # REPRODUCED while having distinguished nothing. That false corroboration is
+    # more dangerous than a false failure, because nobody goes looking for it.
+    # Fires only when the claim declares a null_value, so it never surprises.
+    if claim.get("null_value") is not None:
+        from .tolerance import is_underpowered
+        null = float(claim["null_value"])
+        if is_underpowered(obs, tolf, float(claimed), null):
+            row["verdict"] = "INCONCLUSIVE"
+            row["underpowered"] = True
+            row["would_have_scored"] = "REPRODUCED" if ok else "NOT_REPRODUCED"
+            row["reason"] = (
+                f"the tolerance band (±{tolf:g}, width {2*tolf:g}) is wider than the effect "
+                f"claimed ({abs(float(claimed) - null):g} from the declared null of {null:g}), "
+                f"so this run could not resolve the claim either way. Unfalsifiable at this "
+                f"sample size — neither corroborated nor refuted.")
     return row
 
 

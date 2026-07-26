@@ -823,3 +823,38 @@ def test_consistency_auditor_on_two_real_papers():
     txt = K.report([f, g, m])
     check("report ranks the contradiction first", txt.index("Conv-6") < txt.index("MLP 1x512"))
     check("report tallies every verdict", "1 match, 1 self-repairing, 1 contradictory" in txt)
+
+
+def test_underpowered_claims_score_inconclusive_not_failed():
+    """The capability must reach the VERDICT, not just exist as a library. LTH's
+    C1 is the worked case: a 2-SE band 42 points wide against a 38-point claim."""
+    c1 = {"id": "C1", "metric": "early_stop_reduction_pct", "claimed_value": 38.0,
+          "tolerance": 21.1, "tolerance_kind": "abs", "null_value": 0.0}
+    r = bundle.evaluate_claim(c1, 21.4)
+    check("unresolvable claim is INCONCLUSIVE", r["verdict"] == "INCONCLUSIVE")
+    check("flagged as underpowered", r.get("underpowered") is True)
+    check("reason says neither corroborated nor refuted",
+          "neither corroborated nor refuted" in r.get("reason", ""))
+    # The dangerous direction: a band wider than the effect makes the claim
+    # SPURIOUSLY PASS. It must be caught there too, not only on failures.
+    check("it would otherwise have falsely passed", r.get("would_have_scored") == "REPRODUCED")
+
+    # A precise miss is still a failure -- underpower must not become an excuse.
+    precise = {**c1, "claimed_value": 0.5, "tolerance": 0.0945, "null_value": 0.0}
+    check("a precise miss stays NOT_REPRODUCED",
+          bundle.evaluate_claim(precise, 0.388)["verdict"] == "NOT_REPRODUCED")
+
+    # Without a declared null there is no power question and the wide band
+    # silently passes the claim -- which is exactly the false corroboration the
+    # null_value declaration exists to catch. Pinned so the difference is visible.
+    check("without null_value the same data FALSELY passes",
+          bundle.evaluate_claim({k: v for k, v in c1.items() if k != "null_value"},
+                                21.4)["verdict"] == "REPRODUCED")
+    # An exact hit on an unfalsifiable claim is still unfalsifiable -- it is
+    # inside a band that would have swallowed almost any value.
+    check("an exact hit on an unresolvable claim is still INCONCLUSIVE",
+          bundle.evaluate_claim(c1, 38.0)["verdict"] == "INCONCLUSIVE")
+    # A well-powered pass is untouched.
+    tight = {**c1, "tolerance": 2.0}
+    check("a well-powered pass stays REPRODUCED",
+          bundle.evaluate_claim(tight, 38.0)["verdict"] == "REPRODUCED")

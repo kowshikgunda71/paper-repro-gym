@@ -234,6 +234,41 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    """Zero-compute internal-consistency audit of a paper's printed numbers.
+
+    Reads a spec the caller wrote from the paper (this tool never parses papers --
+    a wrong extraction would manufacture defects that are not there) and checks
+    the arithmetic, which is where errors actually hide."""
+    from . import consistency
+    spec = json.loads(Path(args.spec).read_text(encoding="utf-8"))
+    findings = []
+    for c in spec.get("checks", []):
+        kind = c.get("kind", "mlp")
+        if kind == "mlp":
+            computed = consistency.mlp_params(
+                c["in_dim"], c["depth"], c["width"], c.get("classes", 10), c.get("bias", True))
+            alts = {k: consistency.mlp_params(v, c["depth"], c["width"],
+                                              c.get("classes", 10), c.get("bias", True))
+                    for k, v in (c.get("alternative_in_dims") or {}).items()}
+        else:
+            computed = consistency.conv_params(
+                c["blocks"], c.get("in_ch", 3), c["fc"], c.get("classes", 10),
+                c["spatial"], c.get("kernel", 3), c.get("bias", True))
+            alts = {k: consistency.conv_params(
+                c["blocks"], c.get("in_ch", 3), c["fc"], c.get("classes", 10),
+                v, c.get("kernel", 3), c.get("bias", True))
+                for k, v in (c.get("alternative_spatials") or {}).items()}
+        findings.append(consistency.check(c["label"], int(c["printed"]), computed,
+                                          tolerance=int(c.get("tolerance", 0)),
+                                          alternatives=alts))
+    text = consistency.report(findings)
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+    return 1 if any(f.is_defect for f in findings) else 0
+
+
 def cmd_figures(args: argparse.Namespace) -> int:
     """Render figures + tables from a bundle's or a directory's metrics.
 
@@ -570,6 +605,7 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--require-hardened", {"action": "store_true",
                            "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
+        ("audit", cmd_audit, [("spec", {}), ("--out", {"default": None})]),
         ("figures", cmd_figures, [("source", {}), ("dest", {}),
                                   ("--label", {"default": ""})]),
         ("remote", cmd_remote, [("action", {"choices": ["preflight", "submit", "status", "fetch"]}),
