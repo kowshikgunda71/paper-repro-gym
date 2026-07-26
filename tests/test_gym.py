@@ -741,3 +741,34 @@ def test_figures_are_generated_from_measured_values_only():
         check("every rung is in the table", all(f"{100*(0.8**k):.2f}" in md for k in range(6)))
         check("seed count reported", "2 seeds" in md)
         check("pipeline diagram embedded", "mermaid" in md)
+
+
+def test_figures_never_merge_architectures():
+    """Seed numbers repeat across architectures. A flat {seed: run} map drops
+    every colliding run AND still renders a plausible-looking figure, which is
+    the dangerous failure: silently fewer runs than the caption claims."""
+    try:
+        from paper_repro_gym import figures  # noqa: F401
+    except ModuleNotFoundError:
+        print("  skip: matplotlib not installed (optional extra)")
+        return
+    import subprocess
+    def mk(arch, seed):
+        return {"_arch": arch, "_params": 1, "_config": {"seed": seed, "device": "cpu", "wall_seconds": 1},
+                "_levels": [{"round": k, "pm": 100 * (0.8 ** k),
+                             "ticket": {"test_acc": 0.5, "early_stop_iter": 1}} for k in range(3)]}
+    with tempfile.TemporaryDirectory() as td:
+        src = Path(td) / "in"; src.mkdir()
+        for arch in ("convA", "convB"):
+            for seed in (0, 1):                       # seeds collide across arches
+                (src / f"metrics-{arch}-{seed}.json").write_text(json.dumps(mk(arch, seed)))
+        out = Path(td) / "out"
+        r = subprocess.run([sys.executable, "-m", "paper_repro_gym.cli", "figures",
+                            str(src), str(out)], capture_output=True, text=True,
+                           env={**os.environ, "PYTHONPATH": str(REPO / "src")})
+        check("figures cli succeeded", r.returncode == 0)
+        check("one directory per architecture",
+              (out / "convA").is_dir() and (out / "convB").is_dir())
+        for arch in ("convA", "convB"):
+            md = (out / arch / "FIGURES.md").read_text()
+            check(f"{arch} kept both of its seeds", "2 seeds" in md)

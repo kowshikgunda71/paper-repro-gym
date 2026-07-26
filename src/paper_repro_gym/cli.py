@@ -240,22 +240,37 @@ def cmd_figures(args: argparse.Namespace) -> int:
     CPU only, by design: accelerator quota buys training, not plotting."""
     from . import figures
     src, dest = Path(args.source), Path(args.dest)
-    runs = {}
+    # Group by architecture FIRST. Seed numbers repeat across architectures, so a
+    # flat {seed: run} map silently drops every run whose seed collides with one
+    # from another arch -- and the figure still renders, which is the dangerous part.
+    by_arch: dict = {}
     for f in sorted(src.rglob("metrics*.json")):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
-        if "_levels" in d:
-            runs[d.get("_config", {}).get("seed", len(runs))] = d
-    if not runs:
+        if "_levels" not in d:
+            continue
+        arch = d.get("_arch") or "run"
+        seed = d.get("_config", {}).get("seed")
+        bucket = by_arch.setdefault(arch, {})
+        key = seed if seed not in bucket else f"{seed}:{len(bucket)}"
+        bucket[key] = d
+    if not by_arch:
         print(f"no metrics*.json with _levels under {src}", file=sys.stderr)
         return 1
     matrix = None
     m = src / "claim_result_matrix.json"
     if m.exists():
         matrix = json.loads(m.read_text(encoding="utf-8"))
-    print(json.dumps(figures.build(runs, dest, matrix=matrix, label=args.label), indent=2))
+    out = {}
+    single = len(by_arch) == 1
+    for arch, runs in sorted(by_arch.items()):
+        d = dest if single else dest / arch
+        label = args.label or arch if single else f"{args.label + ' — ' if args.label else ''}{arch}"
+        out[arch] = figures.build(runs, d, matrix=matrix, label=label)
+        print(f"{arch}: {len(runs)} run(s) -> {d}", file=sys.stderr)
+    print(json.dumps(out, indent=2))
     return 0
 
 
