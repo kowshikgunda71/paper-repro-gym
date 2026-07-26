@@ -2,14 +2,28 @@
 
 [![CI](https://github.com/kowshikgunda71/paper-repro-gym/actions/workflows/ci.yml/badge.svg)](https://github.com/kowshikgunda71/paper-repro-gym/actions/workflows/ci.yml)
 
-A gated, containerized **workbench for reproducing research-paper results** —
-re-running the authors' own artifacts and checking the reported numbers against
-a tolerance you register *before* the run.
+**Pre-registration for computational claims.** Freeze a numeric claim, the
+method, and the tolerance you will accept *before* you measure; bind them
+cryptographically to the artifact and the exact command; score mechanically;
+refuse to overstate. Papers are the first input type, not the only one.
 
-> **Reproduction, not replication.** Using ACM's current terminology, re-running
-> the authors' own artifacts is *reproduction* ("Results Reproduced"), not
-> *replication* (which needs independently developed artifacts). This tool does
-> reproduction and never claims otherwise.
+The unusual part is not that it re-runs experiments — plenty of tools do. It is
+that the goalposts are hashed and signed before the run exists, so moving them
+afterwards breaks the approval rather than quietly changing the answer.
+
+Four refusals are built in, and they are the point:
+
+| the tool refuses to | because |
+|---|---|
+| score a claim against a tolerance chosen after seeing the result | that is deciding what "close enough" means once you know the answer |
+| call a claim refuted when the sample cannot resolve it | that asserts evidence a run does not contain |
+| describe a run as contained when it happened on someone else's compute | containment is reported, never claimed |
+| publish a secret, or upload one to third-party compute | uploading is publishing |
+
+> **Reproduction vs replication.** ACM distinguishes re-running the authors'
+> own artifacts (*reproduction*) from re-implementing from the paper's text
+> (*replication*). This tool does both and labels which — `--replication`
+> selects the wording, and it is never inferred.
 
 > **Containment, not a sandbox.** Runs happen in a locked-down container (no
 > network, all capabilities dropped, non-root, read-only root filesystem,
