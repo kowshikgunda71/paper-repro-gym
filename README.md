@@ -32,6 +32,14 @@ Four refusals are built in, and they are the point:
 > and a kernel escape reaches the host. Nothing here is called "sandboxed". See
 > [SECURITY.md](SECURITY.md) and [docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md).
 
+## Beyond papers
+
+[`USE_CASES.md`](USE_CASES.md) separates what the evidence supports from what it
+does not: Part A cites sources for where a verification layer is genuinely
+missing (archival platforms explicitly are not verification; conference
+enforcement is self-reported; pre-registration specifically is an empty lane that
+failed once as a venue). Part B is labelled extrapolation.
+
 ## Agents
 
 Automated agents working in this bench follow [`AGENTS.md`](AGENTS.md) — the
