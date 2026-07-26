@@ -234,6 +234,31 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_figures(args: argparse.Namespace) -> int:
+    """Render figures + tables from a bundle's or a directory's metrics.
+
+    CPU only, by design: accelerator quota buys training, not plotting."""
+    from . import figures
+    src, dest = Path(args.source), Path(args.dest)
+    runs = {}
+    for f in sorted(src.rglob("metrics*.json")):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if "_levels" in d:
+            runs[d.get("_config", {}).get("seed", len(runs))] = d
+    if not runs:
+        print(f"no metrics*.json with _levels under {src}", file=sys.stderr)
+        return 1
+    matrix = None
+    m = src / "claim_result_matrix.json"
+    if m.exists():
+        matrix = json.loads(m.read_text(encoding="utf-8"))
+    print(json.dumps(figures.build(runs, dest, matrix=matrix, label=args.label), indent=2))
+    return 0
+
+
 def cmd_remote(args: argparse.Namespace) -> int:
     """Run an experiment on external compute (Kaggle, ...) when it does not fit
     the gym's 4-CPU / no-GPU sandbox.
@@ -530,6 +555,8 @@ def build_parser() -> argparse.ArgumentParser:
                           ("--require-hardened", {"action": "store_true",
                            "help": "refuse to run unless the boundary is hardened (rootless podman)"})]),
         ("bundle", cmd_bundle, [("experiment", {}), ("run_id", {})]),
+        ("figures", cmd_figures, [("source", {}), ("dest", {}),
+                                  ("--label", {"default": ""})]),
         ("remote", cmd_remote, [("action", {"choices": ["preflight", "submit", "status", "fetch"]}),
                                 ("--provider", {"default": "kaggle"}),
                                 ("--path", {"default": None, "help": "payload dir to scan/submit"}),

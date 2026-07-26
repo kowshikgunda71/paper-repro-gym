@@ -18,6 +18,16 @@ a tolerance you register *before* the run.
 > and a kernel escape reaches the host. Nothing here is called "sandboxed". See
 > [SECURITY.md](SECURITY.md) and [docs/PODMAN_UPGRADE.md](docs/PODMAN_UPGRADE.md).
 
+## Agents
+
+Automated agents working in this bench follow [`AGENTS.md`](AGENTS.md) — the
+operating contract. Most of its rules exist because a specific failure already
+happened here, and each names the failure it prevents. The five that are never
+negotiable: never edit a registered claim after a result exists; never claim
+containment you did not provide; never publish the paper's artifacts; never
+publish a secret (uploading to third-party compute counts as publishing); never
+report a number you did not observe.
+
 ## Why
 
 Reproducing a paper by hand is fiddly and easy to fool yourself on: you tweak a

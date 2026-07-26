@@ -718,3 +718,26 @@ def test_underpowered_is_not_the_same_as_failed():
           not T.is_underpowered(observed_mean=0.388, tolerance=0.0945, claimed=0.5))
     check("a precise hit is not underpowered",
           not T.is_underpowered(observed_mean=0.5, tolerance=0.02, claimed=0.5))
+
+
+def test_figures_are_generated_from_measured_values_only():
+    """Figures in a replication repo are evidence. This pins that every rung the
+    run produced appears, and that nothing is invented between them."""
+    try:
+        from paper_repro_gym import figures
+    except ModuleNotFoundError:
+        print("  skip figures test: matplotlib not installed (optional extra)")
+        return
+    runs = {s: {"_arch": "x", "_params": 100, "_config": {"seed": s, "device": "cpu", "wall_seconds": 60},
+                "_levels": [{"round": k, "pm": 100 * (0.8 ** k),
+                             "ticket": {"test_acc": 0.90 - 0.001 * k, "early_stop_iter": 100}}
+                            for k in range(6)]} for s in (0, 1)}
+    runs[0]["_levels"][3]["random"] = {"test_acc": 0.80, "early_stop_iter": 300}
+    with tempfile.TemporaryDirectory() as td:
+        out = figures.build(runs, Path(td), label="unit")
+        for key in ("ladder", "ladder_delta", "reinit", "markdown"):
+            check(f"produced {key}", key in out and Path(out[key]).exists())
+        md = (Path(td) / "FIGURES.md").read_text()
+        check("every rung is in the table", all(f"{100*(0.8**k):.2f}" in md for k in range(6)))
+        check("seed count reported", "2 seeds" in md)
+        check("pipeline diagram embedded", "mermaid" in md)
