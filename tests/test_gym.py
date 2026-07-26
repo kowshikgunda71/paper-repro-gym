@@ -772,3 +772,54 @@ def test_figures_never_merge_architectures():
         for arch in ("convA", "convB"):
             md = (out / arch / "FIGURES.md").read_text()
             check(f"{arch} kept both of its seeds", "2 seeds" in md)
+
+
+def test_consistency_auditor_on_two_real_papers():
+    """Zero-compute internal-consistency checks, pinned against the two real
+    cases that motivated the module. They point in opposite directions, which is
+    the whole value: one paper's printed count contradicts its own architecture,
+    the other's recovers a detail the text omits."""
+    from paper_repro_gym import consistency as K
+
+    # --- Zhang et al. 2017, Table 1: SELF-REPAIRING -------------------------
+    # The paper never states its CIFAR-10 crop. Printed counts recover it.
+    full = K.mlp_params(32 * 32 * 3, 1, 512, 10)
+    crop = K.mlp_params(28 * 28 * 3, 1, 512, 10)
+    check("full-image reading does not match Table 1", full == 1_578_506)
+    check("28x28 reading matches Table 1 exactly", crop == 1_209_866)
+    f = K.check("MLP 1x512", printed=1_209_866, computed=full,
+                alternatives={"a 28x28x3 centre crop": crop})
+    check("Zhang classified self-repairing", f.verdict == K.SELF_REPAIRING)
+    check("Zhang is not reported as a defect", not f.is_defect)
+    check("the recovered reading is named", "28x28x3" in str(f))
+    # And the crop is recoverable without being told the answer:
+    check("input dim solved from the printed count",
+          K.solve_mlp_input_dim(1_209_866, 1, 512, 10) == 2352)
+    check("depth-3 row recovers the same crop",
+          K.solve_mlp_input_dim(1_735_178, 3, 512, 10) == 2352)
+
+    # --- Frankle & Carbin, Figure 2: CONTRADICTORY --------------------------
+    # Conv-2 and Conv-4 match exactly; Conv-6 cannot be reconciled.
+    # bias=False: Figure 2 counts WEIGHTS, which is also what the pruning
+    # harness treats as prunable. Counting biases shifts Conv-2 by exactly 650,
+    # which would silently break an exact-match audit.
+    cp = lambda spec: K.conv_params(spec, 3, [256, 256], 10, spatial=32, bias=False)
+    conv2, conv4 = cp([[64, 64]]), cp([[64, 64], [128, 128]])
+    conv6 = cp([[64, 64], [128, 128], [256, 256]])
+    check("Conv-2 matches its printed 4.3M", abs(conv2 - 4_300_992) == 0)
+    check("Conv-4 matches its printed 2.4M", abs(conv4 - 2_425_024) == 0)
+    check("Conv-6 computes to 2,261,184", conv6 == 2_261_184)
+    g = K.check("Conv-6", printed=1_700_000, computed=conv6, tolerance=50_000,
+                alternatives={"no padding": K.conv_params(
+                    [[64, 64], [128, 128], [256, 256]], 3, [256, 256], 10,
+                    spatial=26, bias=False)})
+    check("LTH Conv-6 classified contradictory", g.verdict == K.CONTRADICTORY)
+    check("contradictory counts as a defect", g.is_defect)
+
+    # A matching count must not be dressed up as a finding.
+    m = K.check("Conv-2", printed=4_300_992, computed=conv2)
+    check("exact match reported as MATCH", m.verdict == K.MATCH and not m.is_defect)
+
+    txt = K.report([f, g, m])
+    check("report ranks the contradiction first", txt.index("Conv-6") < txt.index("MLP 1x512"))
+    check("report tallies every verdict", "1 match, 1 self-repairing, 1 contradictory" in txt)
